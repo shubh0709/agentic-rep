@@ -113,6 +113,23 @@ def test_connection_failure_is_typed_chained_and_does_not_retry(http_boundary):
     assert len(requests) == 1 and clients[0].is_closed
 
 
+@pytest.mark.parametrize("error_type", [httpx.ReadError, httpx.WriteError, httpx.RemoteProtocolError])
+def test_interrupted_request_reports_uncertain_save_and_does_not_retry(http_boundary, error_type):
+    cause = error_type("Connection closed during submission")
+
+    def fail(request):
+        raise cause
+
+    clients, requests = http_boundary(fail)
+    with pytest.raises(ApiClientError, match="(?i)uncertain") as caught:
+        ingest_transcript("Mitosis")
+
+    assert caught.value.__cause__ is cause
+    assert caught.value.status_code is None
+    assert "search" in str(caught.value).lower()
+    assert len(requests) == 1 and clients[0].is_closed
+
+
 @pytest.mark.parametrize("timeout_type", [httpx.ReadTimeout, httpx.WriteTimeout, httpx.ConnectTimeout])
 def test_timeouts_report_uncertain_save_and_never_retry(http_boundary, timeout_type):
     cause = timeout_type("Timed out after submission")
@@ -210,6 +227,9 @@ def test_missing_entry_fields_are_rejected(http_boundary, field):
     ("id", "17"), ("id", True), ("topic", None), ("subtopic", 2),
     ("tags", "biology"), ("tags", [42]), ("summary", None),
     ("created_at", "yesterday"), ("created_at", None),
+    ("created_at", 1791892800), ("created_at", "2026-10-13"),
+    ("created_at", "1791892800"),
+    ("created_at", "2026-02-30T12:00:00Z"),
 ])
 def test_invalid_entry_fields_are_rejected_even_after_a_valid_entry(http_boundary, field, value):
     invalid = {**ENTRY, field: value}

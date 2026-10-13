@@ -1,12 +1,38 @@
-"""SRA-201 learning targets for submitting text to the Phase 1 HTTP API."""
+"""Submit study notes to the HTTP API without loading server dependencies."""
 
+from datetime import datetime
 from typing import Any
 
 import httpx
+from pydantic import BaseModel, TypeAdapter, ValidationError, field_validator
 
-from sra.config import get_client_settings  # noqa: F401 -- implementation dependency
+from sra.config import get_client_settings
 
+# The server allows two 30-second model attempts; leave room for its DB work.
 HTTP_TIMEOUT_SECONDS = 90.0
+
+
+class _EntryResponse(BaseModel):
+    """Client-side wire contract, independent of the server's response models."""
+
+    id: int
+    topic: str
+    subtopic: str | None
+    tags: list[str]
+    summary: str
+    created_at: str
+
+    @field_validator("created_at")
+    @classmethod
+    def validate_iso_datetime(cls, value: str) -> str:
+        # Require a time component, not a bare date or an epoch string.
+        if not any(separator in value for separator in ("T", "t", " ")):
+            raise ValueError("created_at must be an ISO datetime with a time component")
+        datetime.fromisoformat(value)
+        return value
+
+
+_ENTRY_LIST = TypeAdapter(list[_EntryResponse])
 
 
 class ApiClientError(Exception):
@@ -33,7 +59,8 @@ def _create_http_client() -> httpx.Client:
     lifetime and closes it on both success and failure. Tests replace this
     factory's transport so the real wrapper can reach FastAPI in process.
     """
-    raise NotImplementedError("SRA-201: create the HTTP client with a finite timeout")
+    # HTTPX's default transport has retries=0, including for proxy connections.
+    return httpx.Client(timeout=HTTP_TIMEOUT_SECONDS, follow_redirects=False)
 
 
 def ingest_transcript(transcript: str) -> list[dict[str, Any]]:
@@ -56,4 +83,49 @@ def ingest_transcript(transcript: str) -> list[dict[str, Any]]:
     after submission have an unknown outcome: explain that the server may
     already have saved the note. Never automatically retry a POST.
     """
-    raise NotImplementedError("SRA-201: submit a transcript and validate the response")
+    base_url = get_client_settings().api_base_url.rstrip("/")
+    url = f"{base_url}/api/v1/entries/ingest"
+    try:
+        with _create_http_client() as client:
+            response = client.post(url, json={"transcript": transcript})
+    except httpx.TimeoutException as exc:
+        raise ApiClientError(
+            f"Submission to {url} timed out. The server may already have saved the note; "
+            "check search before submitting again. No automatic retry was attempted."
+        ) from exc
+    except httpx.ConnectError as exc:
+        raise ApiClientError(f"Could not connect to {url}: {exc}") from exc
+    except httpx.RequestError as exc:
+        raise ApiClientError(
+            f"HTTP request to {url} failed: {exc}. The save outcome is uncertain; "
+            "check search before submitting again. No automatic retry was attempted."
+        ) from exc
+
+    if response.status_code != 201:
+        detail = None
+        try:
+            body = response.json()
+        except ValueError:
+            body = None
+        if isinstance(body, dict):
+            detail = body.get("detail")
+        message = detail if detail is not None else response.text.strip() or response.reason_phrase
+        raise ApiClientError(
+            f"Ingestion returned HTTP {response.status_code}: {message}",
+            status_code=response.status_code,
+            detail=detail,
+        )
+
+    try:
+        entries = response.json()
+    except ValueError as exc:
+        raise ApiClientError("Invalid JSON in the ingestion response.", status_code=201) from exc
+
+    try:
+        # Strict validation rejects field coercion (e.g. a string or boolean ID).
+        # Return the original dictionaries so timestamp strings and future
+        # server fields are preserved verbatim.
+        _ENTRY_LIST.validate_python(entries, strict=True)
+    except ValidationError as exc:
+        raise ApiClientError(f"Invalid entries in the ingestion response: {exc}", status_code=201) from exc
+    return entries
