@@ -17,6 +17,16 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+capture = [
+    "httpx>=0.27",
+    "faster-whisper",
+]
+desktop = [
+    "spaced-repetition-agent[capture]",
+    "sounddevice; sys_platform == 'darwin'",
+    "rumps; sys_platform == 'darwin'",
+    "pynput; sys_platform == 'darwin'",
+]
 dev = [
     "pytest>=8.3",
     "httpx>=0.27",
@@ -35,6 +45,11 @@ packages = ["src/sra"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+    "phase2: voice-capture teaching contracts (intentionally red until implemented)",
+    "whisper: opt-in real local Whisper inference",
+    "desktop: requires macOS and installed desktop dependencies",
+]
 
 [tool.ruff]
 line-length = 120
