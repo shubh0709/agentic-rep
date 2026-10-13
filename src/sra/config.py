@@ -47,4 +47,5 @@ def get_settings() -> Settings:
     above) automatically when you construct Settings() with no
     arguments.
     """
-    raise NotImplementedError
+    # load env
+    return Settings() # pyright: ignore[reportCallIssue]
