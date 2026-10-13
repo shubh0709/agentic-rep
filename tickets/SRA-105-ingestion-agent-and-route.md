@@ -3,7 +3,7 @@
 **Type:** Task
 **Phase:** 1 — Core loop
 **Priority:** High
-**Status:** Pending implementation
+**Status:** Implemented; automated tests and live OpenAI verification passed on 2026-10-07
 **Blocked by:** SRA-101 (needs `get_settings()` for the OpenAI key), SRA-103 (`persist_entries` calls `repository.create_entry`), SRA-104 (app + routing already exist to plug this into)
 **Blocks:** SRA-107
 
@@ -59,13 +59,13 @@ Once both parts are done, the `POST /entries/ingest` route becomes real: paste a
 
 ## Acceptance criteria
 
-- [ ] A transcript naming two distinct topics produces two separate `StudyEntryDraft`s, not one merged draft
-- [ ] An LLM call failure sets `state["error"]` rather than raising, and the graph routes to `request_clarification`
-- [ ] A draft with an empty topic or summary is dropped by `validate_entries`
-- [ ] `persist_entries` creates exactly one `StudyEntry` (+ its 6 reviews, via SRA-103/102) per surviving draft
-- [ ] The compiled graph, run end to end on a fixture transcript against a temp DB, produces the expected rows
-- [ ] `POST /api/v1/entries/ingest` with a valid transcript returns `201` and the created entries
-- [ ] An ingestion error (e.g. empty/unparseable transcript) returns `422` with a useful message, not a `500`
+- [x] A transcript naming two distinct topics produces two separate `StudyEntryDraft`s, not one merged draft
+- [x] An LLM call failure sets `state["error"]` rather than raising, and the graph routes to `request_clarification`
+- [x] A draft with an empty topic or summary is dropped by `validate_entries`
+- [x] `persist_entries` creates exactly one `StudyEntry` (+ its 6 reviews, via SRA-103/102) per surviving draft
+- [x] The compiled graph, run end to end on a fixture transcript against a temp DB, produces the expected rows
+- [x] `POST /api/v1/entries/ingest` with a valid transcript returns `201` and the created entries
+- [x] An ingestion error (e.g. empty/unparseable transcript) returns `422` with a useful message, not a `500`
 
 Automated verification uses scripted model responses, including a mocked generation call through the real structured-output parser. Live extraction quality remains to be verified with a configured OpenAI key.
 
@@ -132,10 +132,10 @@ The entry should appear in search immediately. Its `1d` checkpoint appears in th
 
 ## Definition of Done
 
-- [ ] Acceptance criteria verified automatically with mocked model responses
-- [ ] Graph, route, and ingestion-to-digest tests — 33 passed
+- [x] Acceptance criteria verified automatically with mocked model responses
+- [x] Graph, route, and ingestion-to-digest tests — 33 passed
 - [ ] Manual verification produces sensible entries from a real transcript, both directly and via the running server
-- [ ] Full suite: 52 passed, 6 failed in the unimplemented SRA-106 chat/query functions
-- [ ] `ruff check .` and `pyright` pass
+- [x] Full suite: 52 passed, 6 failed in the unimplemented SRA-106 chat/query functions
+- [x] `ruff check .` and `pyright` pass
 
 Verified on 2026-10-07. After replenishing OpenAI credits, the live multi-topic transcript returned HTTP 201 with Photosynthesis and Mitosis entries. Both original transcripts were persisted and each entry received all six pending review checkpoints. Search returned exactly the new Mitosis entry, and both new first checkpoints appeared through the digest route with tomorrow's date simulated.
