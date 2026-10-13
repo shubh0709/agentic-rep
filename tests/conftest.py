@@ -3,7 +3,7 @@ from sqlmodel import Session, SQLModel, create_engine
 from sqlmodel.pool import StaticPool
 
 import sra.db.models  # noqa: F401  (registers tables on SQLModel.metadata)
-from sra.config import get_settings
+from sra.config import get_client_settings, get_settings
 
 
 @pytest.fixture(autouse=True)
@@ -12,8 +12,10 @@ def disable_live_tracing(monkeypatch):
     monkeypatch.setenv("LANGSMITH_TRACING", "false")
     monkeypatch.setenv("LANGCHAIN_TRACING_V2", "false")
     get_settings.cache_clear()
+    get_client_settings.cache_clear()
     yield
     get_settings.cache_clear()
+    get_client_settings.cache_clear()
 
 
 @pytest.fixture
