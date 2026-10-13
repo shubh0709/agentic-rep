@@ -51,8 +51,8 @@ Learning-target functions are typed stubs with teaching docstrings. At the user'
 
 | Ticket | Title | Blocked by | Status |
 |---|---|---|---|
-| [SRA-201](SRA-201-text-capture-api-client.md) | Text capture through the HTTP client | SRA-107 (done) | Config implemented; HTTP client pending |
-| [SRA-202](SRA-202-local-whisper-transcription.md) | Local Whisper transcription into saved study entries | SRA-201 | TDD scaffold ready; implement |
+| [SRA-201](SRA-201-text-capture-api-client.md) | Text capture through the HTTP client | SRA-107 (done) | Done — 2026-10-13; live API/search and recovery verified |
+| [SRA-202](SRA-202-local-whisper-transcription.md) | Local Whisper transcription into saved study entries | SRA-201 | Implemented; automated checks complete |
 | [SRA-203](SRA-203-recording-to-ingestion-pipeline.md) | Recording-to-ingestion pipeline | SRA-202 | TDD scaffold ready; implement |
 | [SRA-204](SRA-204-microphone-capture.md) | Microphone capture through the working pipeline | SRA-203 | TDD scaffold ready; implement |
 | [SRA-205](SRA-205-menubar-hotkey-capture.md) | macOS menu-bar hotkey capture | SRA-204 | TDD scaffold ready; implement |
@@ -76,6 +76,46 @@ flowchart LR
     204 --> 205[SRA-205 Menu-bar hotkey capture]
     205 --> 206[SRA-206 Integration verification]
 ```
+
+### How the Phase 2 files work together
+
+The diagram above is **implementation order**. At runtime, the eventual desktop flow starts at SRA-205 and calls down through the earlier components. Phase 2 adds ways to obtain and submit text; Phase 1 continues to extract study topics, save data, and schedule reviews. Currently SRA-201 and SRA-202 are implemented; the pipeline/desktop functions shown below are the intended flow once SRA-203–205 are complete.
+
+```mermaid
+flowchart LR
+    subgraph Local["Client process on the Mac"]
+        UI["205: menubar_app.py<br/>Hotkey and UI state"] --> Recorder["204: recording.py<br/>Microphone to WAV"]
+        Recorder -->|"Finalized file path"| Pipeline["203: pipeline.py<br/>Coordinate the operation"]
+        Pipeline --> STT["202: transcription.py<br/>Local Whisper"]
+        STT -->|"Transcript string"| Pipeline
+        Pipeline --> Client["201: api_client.py<br/>HTTP submission and validation"]
+        Typed["Typed-note script"] --> Client
+    end
+    subgraph Remote["Backend process: can run on the same Mac"]
+        Route["api/routers/entries.py"] --> Graph["agents/ingestion_graph.py"]
+        Graph --> Repo["db/repository.py"]
+        Repo --> Schedule["db/scheduler.py"]
+    end
+    Client -->|"POST transcript JSON"| Route
+    Route -->|"201 entry-list JSON"| Client
+    Client -->|"Entry dictionaries"| Pipeline
+    Pipeline -->|"Result for UI"| UI
+```
+
+Arrows inside a process represent calls or returned data; the labeled HTTP arrows cross the client/server boundary. Local audio stays with the client. The backend receives transcript text and returns saved entries. The [SRA-201 sequence diagram](SRA-201-text-capture-api-client.md#follow-one-request-and-its-response) expands the request and response, including what happens before the server replies.
+
+| Ticket / main file | Input → output | Responsibility added to the existing flow |
+|---|---|---|
+| [201 — `client/api_client.py`](SRA-201-text-capture-api-client.md) | Transcript string → saved entry dictionaries or `ApiClientError` | Make one HTTP submission, validate the response, and give all callers consistent errors. |
+| [202 — `capture/transcription.py`](SRA-202-local-whisper-transcription.md) | Audio file path → transcript string or `TranscriptionError` | Recognize speech locally and reuse the model; preserve the input file. |
+| [203 — `capture/pipeline.py`](SRA-203-recording-to-ingestion-pipeline.md) | Audio file path → entry list or propagated error | Compose transcription and submission; skip HTTP for silence. |
+| [204 — `capture/recording.py`](SRA-204-microphone-capture.md) | Microphone samples → finalized temporary WAV | Own device/file lifetime; terminal entry point invokes the pipeline after stop. |
+| [205 — `capture/menubar_app.py`](SRA-205-menubar-hotkey-capture.md) | Hotkey/menu event → recording, processing, and result feedback | Coordinate capture state, background processing, UI updates, and orderly quit. |
+| [206 — verification](SRA-206-phase-2-integration-verification.md) | Complete flow → recorded evidence | Prove new IDs, transcripts, ownership, schedules, retrieval, cleanup, and recovery across all components. |
+
+For example, saying "Today I studied mitosis" produces audio samples, then a WAV path, then a transcript string, then `{"transcript": "Today I studied mitosis"}` on the wire. The server turns that text into one or more database entries and six reviews per entry. Its JSON response becomes Python dictionaries again, which the caller uses to display saved IDs/topics or a count. Search, chat, and digest are separate later requests that read the stored data; saving a note does not itself fetch them.
+
+Each ticket now includes its own runtime diagram and a **Files and why they matter** table. Read that map before implementing: it identifies the component to change, the completed components to reuse, and the tests that establish each boundary. Files called "new" in the original plan have already been scaffolded; the remaining work is to implement and verify their learning functions.
 
 ### Required manual evidence for each ticket
 

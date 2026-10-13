@@ -33,8 +33,9 @@ CI (`.github/workflows/ci.yml`) runs the same three checks on every push and
 PR, so `pre-commit` catches things locally and CI is the backstop if a hook
 was skipped or bypassed.
 
-Phase 2 is currently at the TDD scaffold stage: its functions are exercises and
-its tests intentionally fail until you implement them. Run
+SRA-201's HTTP client and SRA-202's transcription wrapper are implemented. The
+remaining Phase 2 functions are exercises and their tests intentionally fail until you
+implement them. Run
 `pytest -m 'not phase2' -q` to protect the completed Phase 1 behavior while working
 through the ticket-specific tests in [tests/README.md](tests/README.md). Keep
 implemented-ticket tests green; remaining Phase 2 failures stay visible in the
@@ -59,12 +60,22 @@ pip install -e ".[dev]"
 pip freeze --exclude-editable > requirements-lock.txt
 ```
 
-This snapshot covers the server/dev environment. Phase 2 declares optional
-`capture` and macOS `desktop` extras, but they are not installed or represented
-in this snapshot yet. Default tests fake those external boundaries. Real Whisper
-checks explicitly opt in with `SRA_RUN_WHISPER_TESTS=1`; see the test guide for
-installation and fixture details. Record a verified optional-dependency snapshot
-when implementing the real capture setup instead of guessing package pins.
+This snapshot covers the server/dev environment and SRA-201's `capture` extra
+(HTTPX, already pinned as a dev dependency). To reproduce and verify text capture:
+
+```bash
+pip install -r requirements-lock.txt
+pip install -e '.[dev,capture]' -c requirements-lock.txt
+pip check
+pytest tests/unit/test_client_config.py tests/unit/test_api_client.py tests/e2e/test_client_ingestion_e2e.py -q
+```
+
+The snapshot and capture extra include `faster-whisper`; macOS `desktop`
+dependencies are declared but are not represented in this snapshot. Default
+tests fake those boundaries.
+Real Whisper checks explicitly opt in with `SRA_RUN_WHISPER_TESTS=1`; see the
+test guide for installation and fixture details. Regenerate and verify the
+optional-dependency snapshot when implementing audio support.
 
 ## Schema migrations (Alembic)
 

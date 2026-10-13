@@ -17,19 +17,81 @@ Implement `SpacedRepetitionAgentApp` in `src/sra/capture/menubar_app.py`. A glob
 
 ## Where things stand right now
 
-After SRA-204, a developer can speak into the microphone from a terminal and verify the resulting entries through search. Recording, cleanup, transcription, and HTTP ingestion already work. This ticket adds the menu-bar event loop and global hotkey around that proven flow.
+After SRA-204 is implemented and verified, a developer can speak into the microphone from a terminal and verify the resulting entries through search. This ticket adds the menu-bar event loop and global hotkey around that flow. Currently its controller and desktop adapter remain stubs; the hotkey setting and optional desktop dependency declarations are already supplied.
 
 ## What this ticket unlocks
 
 **Hotkey in another app → live recording → pipeline → saved entries → search by new ID.** Launch the menu-bar app once, press the shortcut, speak, and press it again to save. During capture, no terminal interaction is required.
 
-## Files
+## How this fits into the whole app
 
-- `src/sra/capture/menubar_app.py`
-- `tests/unit/test_menubar_app.py`
-- `src/sra/config.py`, `tests/unit/test_client_config.py`, `.env.example`
-- `pyproject.toml`, `requirements-lock.txt`
-- `README.md` (desktop setup, permissions, launch, and troubleshooting)
+SRA-204 lets Enter presses drive a recorder and the pipeline. SRA-205 makes those same operations available while another application has focus. `menubar_app.py` owns the user interaction: listen for a shortcut, show whether capture is recording or processing, and display the final result. It delegates microphone/file ownership to `Recorder` and audio-to-entry processing to `process_recording()`.
+
+Two parts make this testable. **`CaptureController`** owns the capture state and the order of operations using injected callbacks. **`SpacedRepetitionAgentApp.run()`** connects that controller to real macOS libraries: `rumps` for the menu-bar app and `pynput` for the global hotkey. The controller can be tested without starting a desktop app; the adapter needs real macOS verification.
+
+```mermaid
+stateDiagram-v2
+    [*] --> idle
+    idle --> recording: Toggle starts a fresh Recorder
+    idle --> idle: Start fails; report and clean up
+    recording --> processing: Toggle stops recorder and queues pipeline
+    recording --> idle: Stop or worker scheduling fails; clean up
+    processing --> processing: Ignore additional toggles
+    processing --> idle: Worker finishes; clean up and show result or error
+    idle --> closed: Quit
+    recording --> closed: Quit; clean up without submission
+    processing --> closed: Quit; let worker finish and clean up
+    closed --> [*]
+```
+
+The four states are `idle`, `recording`, `processing`, and `closed`. A saved-count message is feedback on completion, followed by returning to idle. Keeping processing explicit prevents a rapid hotkey press from starting a second recording or submitting the first one again.
+
+### Why background work and UI dispatch both exist
+
+Transcription and `ingest_transcript()` are synchronous and can take time. Running them on the UI thread would stop the menu responding until they finish. `submit(work)` schedules that processing on a worker. `dispatch(work)` schedules callbacks on the UI thread, where state changes and UI updates are serialized. The hotkey listener must use that dispatcher too; receiving a global key event does not make its callback the UI thread.
+
+```mermaid
+sequenceDiagram
+    participant Keys as Hotkey listener
+    participant UI as UI thread and CaptureController
+    participant Recorder as Recorder
+    participant Worker as Background worker
+    participant Pipeline as process_recording
+    participant Backend as HTTP client and server
+    Keys->>UI: dispatch(toggle) for first press
+    UI->>Recorder: start()
+    UI->>UI: Show recording
+    Keys->>UI: dispatch(toggle) for second press
+    UI->>Recorder: stop()
+    Recorder-->>UI: Finalized WAV path
+    UI->>UI: Set processing and show status
+    UI->>Worker: submit(work)
+    Worker->>Pipeline: process_recording(path)
+    Pipeline->>Backend: Submit locally transcribed text
+    Note over UI,Worker: UI stays responsive and further toggles are ignored
+    Backend-->>Pipeline: Entries or typed error
+    Pipeline-->>Worker: Result or exception
+    Worker->>Recorder: close() in finally, after processing ends
+    Worker->>UI: dispatch(completion)
+    UI->>UI: Show saved count, empty result, or error and return idle
+```
+
+The diagram shows completion while the app remains open. On quit, the controller marks itself closed and stops the listener. An active worker keeps its WAV until processing ends, cleans up, and cannot revive the closed UI with a late result. The adapter must coordinate worker completion before exiting its event loop. Quitting is not a server-side undo operation.
+
+## Files and why they matter
+
+Implement the supplied controller and adapter while retaining the recorder and pipeline as their collaborators.
+
+| File | Role in the bigger picture |
+|---|---|
+| [`src/sra/capture/menubar_app.py`](../src/sra/capture/menubar_app.py) | `CaptureController` coordinates states, worker/UI callbacks, and quit; the app adapter wires actual menu actions and global hotkeys to it. |
+| [`tests/unit/test_menubar_app.py`](../tests/unit/test_menubar_app.py) | Explicit worker/UI queues expose overlap, cleanup, thread-dispatch, and late-completion mistakes without relying on timing or a live desktop. |
+| [`src/sra/config.py`](../src/sra/config.py), [`.env.example`](../.env.example) | Already supply `HOTKEY_COMBO`; the adapter reads it along with the existing server URL and model settings. |
+| [`tests/unit/test_client_config.py`](../tests/unit/test_client_config.py) | Verifies client option defaults and environment overrides. Actual shortcut registration belongs to desktop integration. |
+| [`pyproject.toml`](../pyproject.toml), [`requirements-lock.txt`](../requirements-lock.txt) | Desktop declarations already include `rumps`/`pynput`; verify their installation and dependency snapshot for the implemented adapter. |
+| [`README.md`](../README.md) | Turns working code into a launchable app by documenting permissions, shortcut configuration, server address, startup, and recovery. |
+
+[`recording.py`](../src/sra/capture/recording.py) still owns audio resources, [`pipeline.py`](../src/sra/capture/pipeline.py) still composes transcription/submission, and [`api_client.py`](../src/sra/client/api_client.py) still owns the HTTP contract. The server returns saved entries before the UI reports success. A manual search using those exact IDs then verifies the complete flow beyond the menu's message.
 
 ## What to implement
 

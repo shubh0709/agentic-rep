@@ -17,17 +17,57 @@ Implement `process_recording(audio_path)` in `src/sra/capture/pipeline.py`. It o
 
 ## Where things stand right now
 
-SRA-202 proved a real WAV can become searchable entries by manually calling transcription and the HTTP client in sequence. That script does not yet provide a reusable operation that handles silence and failures consistently. This ticket establishes that operation and tests it through the real API and scheduler.
+When SRA-202 is complete, a real WAV can become searchable entries by manually calling transcription and the HTTP client in sequence. That script does not yet provide a reusable operation that handles silence and failures consistently. This ticket establishes that operation and tests it through the real API and scheduler. Currently `process_recording()` remains a supplied teaching stub.
 
 ## What this ticket unlocks
 
 **One call with a WAV → transcript → API → searchable entries and scheduled reviews.** Silence returns a no-speech result, transcription failures prevent submission, and client failures propagate without retrying. The next capture surfaces reuse exactly this behavior.
 
-## Files
+## How this fits into the whole app
 
-- New: `src/sra/capture/pipeline.py`
-- New: `tests/unit/test_capture_pipeline.py`, `tests/e2e/test_voice_capture_to_digest_e2e.py`
-- `README.md` (saved-recording usage)
+SRA-202 teaches the two calls separately: first `transcribe(path)`, then `ingest_transcript(text)`. `pipeline.py` makes them one application operation: **"process this recording and give me the created entries."** It owns their order and the decision to submit. The transcription module owns speech recognition; the HTTP client owns communication; the server owns study-entry extraction, persistence, and schedules.
+
+This is useful even though the function is small. A terminal command and a menu-bar callback should both treat silence, errors, and submission in the same way. They can call `process_recording(path)` instead of each recreating that policy.
+
+```mermaid
+flowchart TD
+    Caller["Saved-file script; later terminal or menu-bar caller"] --> Pipeline["SRA-203: process_recording(path)"]
+    Settings["ClientSettings.whisper_model_size"] --> Pipeline
+    Pipeline --> Transcribe["SRA-202: transcribe(path, model_size)"]
+    Transcribe -->|"Transcript string"| Speech{"Any nonblank text?"}
+    Transcribe -->|"TranscriptionError"| Failure["Propagate error to caller"]
+    Speech -->|"No"| Empty["Return empty list; no HTTP request"]
+    Speech -->|"Yes"| Client["SRA-201: ingest_transcript(text), once"]
+    Client -->|"POST transcript"| Server["Phase 1: extract, store, schedule"]
+    Server -->|"201 entry-list JSON"| Client
+    Client -->|"Validated entries"| Result["Return list to caller"]
+    Client -->|"ApiClientError"| Failure
+```
+
+The pipeline passes the configured model size to transcription, checks `transcript.strip()` for emptiness, and sends the original nonempty transcript unchanged. One request can create several entries when the note covers several topics. A successful result is a list of entry dictionaries, the same shape returned by SRA-201; the pipeline adds no new HTTP route or response model.
+
+The empty-list convention deserves care: silence returns `[]` without a POST, but the HTTP wrapper also permits a valid `201` with an empty list. Therefore, `[]` means **no returned entries**, and by itself does not prove whether a POST happened. The no-speech tests explicitly verify that no request was made. Transcription and API errors remain exceptions; converting them into `[]` would hide a failure as an ordinary empty result.
+
+### Who owns the work and the file?
+
+The caller lends the pipeline a readable path. The pipeline reads it through transcription and returns or raises; it never deletes the file. SRA-204's recorder will own temporary audio and clean it up after processing. This lets the same pipeline handle both a user's saved recording and an app-created temporary recording safely.
+
+All of this work is synchronous: the caller waits for transcription and the server response. A terminal script can wait directly. SRA-205 must run this same operation on a worker so the menu remains responsive. Adding a worker changes where the function runs, not the sequence inside it.
+
+## Files and why they matter
+
+The implementation and test files are already scaffolded. This ticket fills in the composition function and verifies the resulting application flow.
+
+| File | Role in the bigger picture |
+|---|---|
+| [`src/sra/capture/pipeline.py`](../src/sra/capture/pipeline.py) | Coordinates settings → transcription → conditional HTTP submission; gives later capture surfaces one function to call. |
+| [`tests/unit/test_capture_pipeline.py`](../tests/unit/test_capture_pipeline.py) | Isolates orchestration: configured model size, original text forwarded once, silence skips HTTP, errors propagate, and input survives. |
+| [`tests/e2e/test_voice_capture_to_digest_e2e.py`](../tests/e2e/test_voice_capture_to_digest_e2e.py) | Keeps the pipeline and downstream application code real while replacing inference and network location; follows returned IDs into storage, search, and the due-date digest. |
+| [`README.md`](../README.md) | Gives a runnable saved-WAV example using the new single-call interface. |
+
+Read [`transcription.py`](../src/sra/capture/transcription.py), [`api_client.py`](../src/sra/client/api_client.py), and [`config.py`](../src/sra/config.py) as the completed collaborators. [`tests/e2e/conftest.py`](../tests/e2e/conftest.py) supplies the isolated HTTP/model wiring. The backend repository and scheduler remain Phase 1 responsibilities: this ticket's e2e test proves that the new entry point still reaches them.
+
+That test checks more than a return value. It compares response IDs to stored rows and search results, verifies six pending reviews per entry, and advances the digest's date to the next day without modifying stored schedules. This connects "I processed a recording" to the product goal, "I can retrieve and review what I studied."
 
 ## What to implement
 

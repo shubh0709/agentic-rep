@@ -17,18 +17,74 @@ Build the microphone recording portion of plan U5 and wire it directly into `pro
 
 ## Where things stand right now
 
-SRA-203 processes saved audio end to end, but the user still has to provide a recording. The plan originally put microphone capture and desktop UI in one module. Extracting the recorder here lets a developer prove actual device access, WAV finalization, and cleanup through the working ingestion flow before adding UI callbacks.
+Once SRA-203 is complete, saved audio can be processed end to end, but the user still has to provide a recording. The recorder and terminal entry point currently remain teaching stubs. The plan originally put microphone capture and desktop UI in one module. Extracting the recorder here lets a developer prove actual device access, WAV finalization, and cleanup through the working ingestion flow before adding UI callbacks.
 
 ## What this ticket unlocks
 
 **Speak into the microphone → stop with Enter → local transcription → stored entries → search.** This is the same recorder and pipeline the menu-bar app will use. The terminal entry point is a small verification surface for the planned recording behavior.
 
-## Files
+## How this fits into the whole app
 
-- New: `src/sra/capture/recording.py`
-- New: `tests/unit/test_recording.py`
-- End to end: `tests/e2e/test_terminal_capture_e2e.py` (real recorder/CLI/pipeline/API; controlled PCM and inference)
-- `pyproject.toml`, `requirements-lock.txt`, `README.md`
+The pipeline accepts a file path. A microphone provides a stream of audio samples. `recording.py` turns that live stream into the finalized WAV file the pipeline already understands. The terminal entry point then joins these two operations so speaking can produce the same saved entries as a typed note.
+
+There are two roles in this module. **`Recorder`** owns the microphone and temporary WAV; it exposes `start()`, `stop() -> Path`, and `close()`. **`main()`** translates Enter presses into those operations, calls `process_recording(path)`, and prints the result. Keeping the recorder independent of terminal input lets SRA-205 drive it with a hotkey.
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant CLI as recording.main
+    participant Recorder as Recorder
+    participant Mic as Microphone stream
+    participant WAV as Owned temporary WAV
+    participant Pipeline as process_recording
+    participant Server as Existing HTTP client and backend
+    User->>CLI: Enter to start
+    CLI->>Recorder: start()
+    Recorder->>WAV: Allocate unique recording
+    Recorder->>Mic: Open and start stream
+    Mic-->>Recorder: PCM audio buffers while user speaks
+    Recorder->>WAV: Store captured frames
+    User->>CLI: Enter to stop
+    CLI->>Recorder: stop()
+    Recorder->>Mic: Stop and close stream
+    Recorder->>WAV: Finalize and close WAV for reading
+    Recorder-->>CLI: Path to readable WAV
+    CLI->>Pipeline: process_recording(path)
+    Pipeline->>WAV: Read audio through local transcription
+    Pipeline->>Server: Submit recognized text
+    Server-->>Pipeline: Saved entry dictionaries
+    Pipeline-->>CLI: Entries
+    CLI-->>User: Saved IDs and topics
+    CLI->>Recorder: close() on context exit
+    Recorder->>WAV: Delete owned temporary audio
+```
+
+This is the intended successful flow after implementation. `stop()` releases the microphone and makes the recording readable. `close()` ends the recording's lifetime and removes its owned file. They cannot be the same operation: deleting the WAV at stop would leave transcription with a missing input. A fresh `Recorder` is used for the next capture.
+
+### Follow ownership through success and failure
+
+| Resource or result | Owner | Lifetime / handoff |
+|---|---|---|
+| Microphone stream | `Recorder` | Acquired on start; released on stop or cleanup, including partial failures. |
+| Temporary WAV | `Recorder` | Created for one capture; stays readable throughout processing; removed on close/context exit. |
+| Borrowed WAV path | Pipeline and transcription | Read without deleting or taking ownership of the file. |
+| Transcript and returned entries | Pipeline caller | Used to submit once and display the backend's actual result. |
+
+Cancellation during capture closes resources and submits nothing. A transcription or API error after stop still exits through recorder cleanup. A timeout retains SRA-201's uncertain-save message: deleting the local recording does not cancel or roll back a server write. For an ordinary successful response, the terminal can report the returned IDs, and a separate search request verifies them.
+
+## Files and why they matter
+
+These source and test files are supplied. The exercise implements device/file ownership and the terminal handoff around the existing pipeline.
+
+| File | Role in the bigger picture |
+|---|---|
+| [`src/sra/capture/recording.py`](../src/sra/capture/recording.py) | `_open_audio_stream` adapts optional `sounddevice`; `Recorder` manages capture and cleanup; `main()` connects Enter presses to the pipeline. |
+| [`tests/unit/test_recording.py`](../tests/unit/test_recording.py) | Uses controlled audio and failures to verify WAV contents, valid lifecycle transitions, cleanup, cancellation, and the terminal handoff. |
+| [`tests/e2e/test_terminal_capture_e2e.py`](../tests/e2e/test_terminal_capture_e2e.py) | Exercises the actual recorder, terminal command, pipeline, HTTP client, and backend with fake hardware/inference; proves captured frames can reach persisted entries. |
+| [`pyproject.toml`](../pyproject.toml), [`requirements-lock.txt`](../requirements-lock.txt) | The desktop extra already declares microphone dependencies in the scaffold; verify the installed dependency set needed for real recording. |
+| [`README.md`](../README.md) | Gives microphone permissions, installation, terminal launch, and cleanup-inspection steps for real hardware verification. |
+
+Reuse [`pipeline.py`](../src/sra/capture/pipeline.py) for all downstream behavior. Tests can prove lifecycle rules without opening a real device; the manual capture is still needed to establish that macOS permissions and the selected microphone actually work. The entry point's `if __name__ == "__main__"` guard ensures importing the recorder for SRA-205 does not start the terminal interaction.
 
 ## What to implement
 

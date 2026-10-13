@@ -3,11 +3,13 @@
 The tests are written; you implement the functions. Phase 1 already works.
 Phase 2 learning functions contain typed signatures, teaching docstrings, and
 `raise NotImplementedError`. Errors, protocols, settings fields, and test fixtures
-are supporting plumbing. Start with **SRA-201**, then work through **SRA-205**.
+are supporting plumbing. **SRA-201 and SRA-202 are implemented**; continue with
+**SRA-203** through **SRA-205**.
 SRA-206 verifies the finished system and the real desktop flow.
 
-Client configuration is already implemented and its 24 tests pass. Continue
-SRA-201 with the HTTP client; the remaining capture functions are still stubs.
+Client configuration and HTTP submission are implemented: their **77 unit/e2e
+tests pass**, including strict response validation, interruption/timeout errors,
+storage, scheduling, search, and recovery. The audio capture functions remain stubs.
 
 ## Red → green → refactor
 
@@ -88,6 +90,7 @@ repeat with cached weights offline before recording SRA-202 completion.
 
 On macOS, install `'.[dev,desktop]'` for real recording and menu-bar acceptance.
 The module launch commands in the tickets become usable after you implement
-their stubs. The current `requirements-lock.txt` remains the Phase 1 server/dev
-snapshot; capture/desktop extras are declared separately and have not been
-installed or locked as part of this test-only scaffold.
+their stubs. `requirements-lock.txt` covers the server/dev environment and the
+implemented `capture` extra, including local Whisper inference. Desktop-only
+audio/UI dependencies still need their own installation and lock verification
+as those tickets are implemented.

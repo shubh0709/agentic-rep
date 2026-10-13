@@ -2,7 +2,13 @@
 
 An open-source, self-hostable study agent: capture what you studied, get it resurfaced on a spaced-repetition schedule, and quiz yourself on it — built with LangChain, LangGraph, and FastAPI.
 
-This repo is a **teaching project**. Phase 1 is implemented and verified. Phase 2 now has tests and typed teaching stubs: you implement the functions, guided by their docstrings and failing assertions. Supporting plumbing (error types, protocols, configuration fields, ORM models, and DB sessions) is provided. See the [Phase 2 TDD guide](tests/README.md) for the implementation order and test commands.
+This repo is a **teaching project**. Phase 1, SRA-201's text HTTP client, and
+SRA-202's local transcription are implemented. The remaining Phase 2 functions
+have tests and typed teaching stubs: you implement them, guided by their
+docstrings and failing assertions. Supporting plumbing (error types, protocols,
+configuration fields, ORM models, and DB sessions) is provided. See the
+[Phase 2 TDD guide](tests/README.md) for the implementation order and test
+commands.
 
 See [`docs/plans/`](docs/plans/) for the full implementation plan and [`docs/design/technical-design.md`](docs/design/technical-design.md) for the HLD/LLD/database/API design.
 
@@ -76,18 +82,60 @@ uvicorn sra.api.app:create_app --factory --reload
 
 Then `POST /api/v1/entries/ingest {"transcript": "..."}`, `GET /api/v1/digest`, `GET /api/v1/search?q=...`, `POST /api/v1/chat {"question": "..."}`.
 
+## Submit a typed note from Python
+
+Install the HTTP client extra and run the server from the previous section:
+
+```bash
+pip install -e '.[dev,capture]'
+```
+
+The client reads `API_BASE_URL` from the environment or `.env`, defaulting to
+`http://127.0.0.1:8000`. Use the server origin or deployment prefix without
+`/api/v1`; a trailing slash is accepted. The client needs no OpenAI, LangSmith,
+database, or OAuth credentials. The running server owns model calls and resolves
+the local user.
+
+```python
+import httpx
+from sra.client.api_client import ingest_transcript
+from sra.config import get_client_settings
+
+entries = ingest_transcript("Today I studied mitosis and the phases of cell division.")
+base = get_client_settings().api_base_url.rstrip("/")
+with httpx.Client(timeout=30) as client:
+    for entry in entries:
+        response = client.get(f"{base}/api/v1/search", params={"q": entry["topic"]})
+        response.raise_for_status()
+        assert entry["id"] in {row["id"] for row in response.json()}
+        print("Saved and found:", entry["id"], entry["topic"])
+```
+
+Each call sends one POST containing only the transcript, with no automatic retry
+or redirect following. The HTTP timeout is 90 seconds per operation, allowing for
+the server's two 30-second model attempts and database work. HTTP resources close
+on success and failure. Errors raise `ApiClientError`, with `status_code` and
+FastAPI's `detail` when available. After a timeout or interrupted response, the
+server may already have saved the note: check search before explicitly submitting
+again. Settings are cached; restart the client or call
+`get_client_settings.cache_clear()` after changing its environment.
+
+See [SRA-201](tickets/SRA-201-text-capture-api-client.md) for the live verification
+record and unused-port recovery check.
+
 ## Phase 2 — implement against the tests
 
-Start with [SRA-201](tickets/SRA-201-text-capture-api-client.md), then work through
-SRA-202–205. The HTTP client, transcription, pipeline, recorder, and menu-bar
-controller functions deliberately raise `NotImplementedError`. All their tests
-are supplied, including end-to-end flows through the real API/database/scheduler.
-The [test guide](tests/README.md) distinguishes unit, end-to-end, real Whisper,
-and manual desktop checks and explains the expected red/green workflow.
+Continue with SRA-203–205. Pipeline, recorder, and menu-bar controller functions
+still raise `NotImplementedError`. Their tests are supplied,
+including end-to-end flows through the real API/database/scheduler. The
+[test guide](tests/README.md) distinguishes unit, end-to-end, real Whisper, and
+manual desktop checks and explains the expected red/green workflow.
 
-Default tests only need `'.[dev]'`. Once implementing real audio, use
-`pip install -e '.[dev,capture]'`, or `'.[dev,desktop]'` on macOS for microphone
-and menu-bar dependencies. Client settings are `API_BASE_URL` (default
+Default tests only need `'.[dev]'`. Install `'.[dev,capture]'` for the HTTP client
+and local `faster-whisper` transcription. The model is constructed only when
+transcription is requested; first use may download model weights, which later
+runs reuse from the local cache. The `desktop` extra adds macOS microphone and
+menu-bar dependencies. Client settings are `API_BASE_URL` (default
 `http://127.0.0.1:8000`, without `/api/v1`), `WHISPER_MODEL_SIZE` (`base`), and
 `HOTKEY_COMBO` (`<ctrl>+<alt>+r`). The client needs no server credentials.
 The complete desktop launch, permissions, and failure/recovery acceptance steps
