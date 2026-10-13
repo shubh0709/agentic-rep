@@ -1,10 +1,11 @@
 """Spaced-repetition interval math and the persistence that hangs off it."""
 
-from datetime import date
+from datetime import date, timedelta
 
+from dateutil.relativedelta import relativedelta
 from sqlmodel import Session
 
-from sra.db.models import ReviewSchedule
+from sra.db.models import ReviewSchedule, ReviewScheduleCreate
 
 # (interval_label, offset_in_days). "1mo"/"3mo"/"6mo" are handled specially
 # in compute_review_dates -- see its docstring -- this list only drives the
@@ -39,7 +40,24 @@ def compute_review_dates(studied_on: date) -> list[tuple[str, date]]:
     and think about what should happen when `studied_on` is the 31st
     of a month and the target month is shorter (e.g. Jan 31 -> Feb).
     """
-    raise NotImplementedError
+
+    dates: list[tuple[str, date]] = []
+
+    for label, offset in INTERVALS:
+        if offset is not None:
+            scheduled_date = studied_on + timedelta(days=offset)
+        else:
+            months: int = {
+                "1mo": 1,
+                "3mo": 3,
+                "6mo": 6,
+            }[label]
+
+            scheduled_date = studied_on + relativedelta(months=months)
+
+        dates.append((label, scheduled_date))
+
+    return dates
 
 
 def schedule_reviews_for_entry(entry_id: int, studied_on: date, session: Session) -> list[ReviewSchedule]:
@@ -52,4 +70,27 @@ def schedule_reviews_for_entry(entry_id: int, studied_on: date, session: Session
     transaction -- a batch-insert pattern you'll see again once more
     tables show up in later phases.
     """
-    raise NotImplementedError
+    rows = [
+        ReviewSchedule.model_validate(
+            ReviewScheduleCreate(entry_id=entry_id, interval_label=label, scheduled_date=scheduled_date)
+        )
+        for label, scheduled_date in compute_review_dates(studied_on)
+    ]
+
+    # add() only stages each row in the session's pending changes -- nothing
+    # is sent to the DB yet, so a mid-loop error here can't leave partial rows.
+    for row in rows:
+        session.add(row)
+
+    # One commit for all six rows -- a single INSERT transaction, not six
+    # separate ones. This is the "one transaction" the docstring above refers to.
+    session.commit()
+
+    # commit() writes to the DB but doesn't automatically update the Python
+    # objects with DB-generated values (like the autoincremented `id`).
+    # refresh() re-reads each row from the DB so `row.id` etc. are populated
+    # on the objects we're about to return.
+    for row in rows:
+        session.refresh(row)
+
+    return rows
