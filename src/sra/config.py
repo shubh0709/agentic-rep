@@ -1,8 +1,9 @@
 """Application configuration, loaded once from environment variables / .env."""
 
 from functools import lru_cache
+from typing import Self
 
-from pydantic import SecretStr
+from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -20,6 +21,18 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-4.1-nano"
     database_url: str = "sqlite:///./sra.db"
     whisper_model_size: str = "base"
+    langsmith_tracing: bool = False
+    langsmith_api_key: SecretStr = SecretStr("")
+    langsmith_project: str = "spaced-repetition-agent"
+    langsmith_endpoint: str = "https://api.smith.langchain.com"
+    langsmith_workspace_id: str | None = None
+
+    @model_validator(mode="after")
+    def validate_tracing_credentials(self) -> Self:
+        if self.langsmith_tracing and not self.langsmith_api_key.get_secret_value().strip():
+            raise ValueError("LANGSMITH_API_KEY is required when LANGSMITH_TRACING=true")
+        return self
+
 
 @lru_cache
 def get_settings() -> Settings:
