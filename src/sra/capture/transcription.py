@@ -32,7 +32,9 @@ def _create_whisper_model(model_size: str) -> WhisperModelLike:
     unit and end-to-end tests. The real fixture check opts into the dependency
     and possible first-run download explicitly.
     """
-    raise NotImplementedError("SRA-202: lazily construct the local Whisper model")
+    from faster_whisper import WhisperModel  # pyright: ignore[reportMissingImports]
+
+    return WhisperModel(model_size)
 
 
 @lru_cache
@@ -45,7 +47,10 @@ def load_model(model_size: str) -> WhisperModelLike:
     failed calls. Tests clear it using load_model.cache_clear(). Keep the cache
     on this boundary so different recordings reuse the same expensive model.
     """
-    raise NotImplementedError("SRA-202: load and cache a model by size")
+    try:
+        return _create_whisper_model(model_size)
+    except Exception as exc:
+        raise TranscriptionError(f"Could not load Whisper model {model_size!r}") from exc
 
 
 def transcribe(audio_path: Path, model_size: str = "base") -> str:
@@ -65,4 +70,28 @@ def transcribe(audio_path: Path, model_size: str = "base") -> str:
       model-loading boundary. Never return a partial transcript after a failure.
     Never modify or remove audio_path: its creator owns cleanup.
     """
-    raise NotImplementedError("SRA-202: validate and transcribe the recording")
+    try:
+        if not audio_path.exists():
+            raise FileNotFoundError(audio_path)
+        if not audio_path.is_file():
+            raise IsADirectoryError(f"Not a regular file: {audio_path}")
+        with audio_path.open("rb"):
+            pass
+    except (OSError, ValueError) as exc:
+        raise TranscriptionError(f"Could not read recording {audio_path}") from exc
+
+    try:
+        model = load_model(model_size)
+    except TranscriptionError:
+        raise
+
+    try:
+        segments, _ = model.transcribe(str(audio_path))
+        fragments = []
+        for segment in segments:
+            text = segment.text.strip()
+            if text:
+                fragments.append(text)
+        return " ".join(fragments)
+    except Exception as exc:
+        raise TranscriptionError(f"Could not transcribe recording {audio_path}") from exc
