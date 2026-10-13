@@ -29,4 +29,8 @@ def create_app() -> FastAPI:
     fixture for why `init_db` is imported by name here (it monkeypatches
     `sra.api.app.init_db` directly rather than touching the real DB file).
     """
-    raise NotImplementedError
+
+    init_db()
+    app = FastAPI(title="Spaced Repetition Agent")
+    app.include_router(api_router, prefix=API_V1_PREFIX)
+    return app

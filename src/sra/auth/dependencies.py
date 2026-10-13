@@ -8,12 +8,18 @@ function name and return type, so that swap won't touch route code.
 """
 
 from fastapi import Depends
-from sqlmodel import Session
+from sqlmodel import Session, select
 
-from sra.db.models import User
+from sra.db.models import User, UserCreate
 from sra.db.session import get_session
 
 
 def get_current_user(session: Session = Depends(get_session)) -> User:
     """Return the single local user, creating it on first call if none exists yet."""
-    raise NotImplementedError
+    user = session.exec(select(User)).first()
+    if user is None:
+        user = User.model_validate(UserCreate(email="local@localhost", display_name="Local User"))
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+    return user
