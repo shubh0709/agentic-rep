@@ -3,7 +3,7 @@
 **Type:** Verification (no new code expected)
 **Phase:** 1 — Core loop
 **Priority:** Highest — this is the "Phase 1 is actually done" checkpoint
-**Status:** Pending implementation
+**Status:** Done — live OpenAI flow verified on 2026-10-07
 **Blocked by:** SRA-105, SRA-106 (transitively: all of SRA-101 through SRA-106)
 **Blocks:** Phase 2 kickoff
 
@@ -21,10 +21,10 @@ That the app is a coherent whole, not six modules that each work in isolation bu
 
 ## Acceptance criteria
 
-- [ ] `pytest -q` — full suite green, 0 failed, 0 errors
-- [ ] `pytest -q tests/e2e/` — all end-to-end tests green on their own
-- [ ] The manual flow below succeeds start to finish against a running server
-- [ ] `PROGRESS.md`'s Phase 1 section and this ticket board are updated to reflect Phase 1 as done
+- [x] `pytest -q` — full suite green, 0 failed, 0 errors
+- [x] `pytest -q tests/e2e/` — all end-to-end tests green on their own
+- [x] The manual flow below succeeds start to finish against a running server
+- [x] `PROGRESS.md`'s Phase 1 section and this ticket board are updated to reflect Phase 1 as done
 
 ## Full test suite
 
@@ -74,6 +74,27 @@ curl -s -X POST http://localhost:8000/api/v1/chat \
 
 Once these requests succeed and both first checkpoints appear when due, Phase 1 is functionally complete: capture (via pasted transcript) → structured storage → spaced-repetition scheduling → digest → search → conversational Q&A, all working together. The end-to-end digest test advances the date without waiting a day.
 
+Verification on 2026-10-07 after switching to OpenAI: 91 automated tests pass,
+including 3 end-to-end tests also run independently. After replenishing API
+credits, the five live requests returned 201, 200, 200, 200, and 200.
+Ingestion created Photosynthesis (ID 2) and Mitosis (ID 3), with six pending
+checkpoints each and both first reviews scheduled for 2026-10-08. Today's
+digest returned only three overdue reviews for a pre-existing entry. A
+separate request through the real digest route with its date simulated as
+2026-10-08 returned both new `1d` reviews without changing database dates.
+Search returned exactly Mitosis. The chat answers were:
+
+- Mitosis: "You studied the phases of cell division related to mitosis."
+- Quantum computing: "There are no records of your study about quantum computing."
+
+## After this ticket closes
+
+- [x] Mark Phase 1 as done in `PROGRESS.md`
+- [ ] Delete or reset the local `sra.db` file if you want a clean slate before starting Phase 2 (it's gitignored, so this is just local housekeeping)
+- [x] Ready to start Phase 2 (local Whisper transcription + the menu-bar hotkey client) — new tickets (`SRA-2xx`) will be created once that phase's scaffold exists
+
 ## Definition of Done
 
-- [ ] Verify the full core loop and update the phase board.
+- [x] All acceptance criteria met
+- [x] `PROGRESS.md` updated
+- [x] This board's Phase 1 row in `tickets/README.md` marked done

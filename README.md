@@ -1,19 +1,95 @@
 # Spaced Repetition Agent
 
-An open-source, self-hostable study agent built with Python and FastAPI.
+An open-source, self-hostable study agent: capture what you studied, get it resurfaced on a spaced-repetition schedule, and quiz yourself on it — built with LangChain, LangGraph, and FastAPI.
 
-Phase 1 will turn study transcripts into structured entries, schedule reviews, and expose digest, search, and conversational query endpoints.
+This repo ships as a **teaching scaffold**: every learning-target function is a typed stub with a docstring explaining what it does and what concept it exercises, paired with tests that currently fail (`NotImplementedError`) and become the correctness spec once you implement it. Non-learning-target plumbing (config loading, ORM models, DB sessions) is written out in full.
 
-Requires Python 3.11 or newer. Create a virtual environment and install with `pip install -e .`.
+See [`docs/plans/`](docs/plans/) for the full implementation plan and [`docs/design/technical-design.md`](docs/design/technical-design.md) for the HLD/LLD/database/API design.
 
-## License
+## Build phases
 
-[MIT](LICENSE)
+The project is being built incrementally, smallest working slice first:
+
+- [x] **Phase 1 — Core loop.** Single local user, no auth yet. An ingestion agent turns a pasted transcript into structured study entries, a fixed-interval scheduler (1d/3d/7d/1mo/3mo/6mo) schedules reviews, and a minimal API exposes ingest / digest / search / chat.
+- [ ] **Phase 2 — Voice capture.** Local Whisper transcription + a macOS menu-bar hotkey client, wired to Phase 1's ingest endpoint.
+- [ ] **Phase 3 — Multi-tenancy.** Google OAuth login, real per-user data isolation, RBAC (user/admin), API rate limiting.
+- [ ] **Phase 4 — Daily quiz.** MCQ generation agent, nightly pre-generation job, web quiz flow.
+- [ ] **Phase 5 — Wake-up & voice quiz.** Per-user scheduled time, spoken digest read-out, voice quiz conversation agent.
+- [ ] **Phase 6 — Open-source packaging.** Docker, docker-compose, demo mode, self-host docs.
+
+## Phase 1 — what's here
+
+```
+src/sra/
+  config.py              Settings + get_settings() [1 stub]
+  db/
+    models.py             User, StudyEntry, ReviewSchedule (concrete)
+    session.py             DB engine/session setup (concrete)
+    scheduler.py           compute_review_dates, schedule_reviews_for_entry [stubs]
+    repository.py          create_entry, get_due_reviews, search_entries, mark_review_done [stubs]
+  auth/
+    dependencies.py         get_current_user — Phase 1 placeholder (concrete; real OAuth lands in Phase 3)
+  agents/
+    schemas.py               StudyEntryDraft (concrete)
+    ingestion_graph.py        LangGraph: transcript -> structured entries [stubs]
+    query_graph.py            LangGraph: tool-calling Q&A over your history [stubs]
+  api/
+    schemas.py                 Request/response DTOs (concrete)
+    deps.py                     Shared dependencies re-exported for routers (concrete)
+    app.py                      create_app() [stub]
+    routers/
+      entries.py                 POST /entries/ingest [stub]
+      digest.py                  GET /digest [stub]
+      search.py                  GET /search [stub]
+      chat.py                    POST /chat [stub]
+  alembic/                     Schema migrations (env.py wired to Settings.database_url)
+tests/
+  unit/          one test module per stubbed module above
+  e2e/           ingest -> digest, end to end
+```
+
+Every router in `api/routers/` is mounted under `/api/v1` by `create_app()` (via `api/routers/__init__.py`'s aggregate `api_router`), so the routes above are reachable at `/api/v1/entries/ingest`, `/api/v1/digest`, etc.
+
+Phase 1 intentionally skips voice capture — you paste/type a transcript into `/api/v1/entries/ingest` to exercise the ingestion agent and scheduler before any audio pipeline exists.
+
+## Getting started
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+pre-commit install     # runs ruff + pyright on every commit — see CONTRIBUTING.md
+cp .env.example .env   # first setup only; fill in OPENAI_API_KEY
+alembic upgrade head   # create the DB schema (see CONTRIBUTING.md for the migration workflow)
+
+pytest                 # everything fails with NotImplementedError right now — that's the spec
+```
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the dev workflow (lint/type-check/tests, reproducible installs, migrations) and the DB model conventions every new table should follow.
+
+Once you've implemented the Phase 1 stubs:
+
+```bash
+uvicorn sra.api.app:create_app --factory --reload
+```
+
+Then `POST /api/v1/entries/ingest {"transcript": "..."}`, `GET /api/v1/digest`, `GET /api/v1/search?q=...`, `POST /api/v1/chat {"question": "..."}`.
+
+Both agents use OpenAI through `langchain-openai`. Set `OPENAI_API_KEY` in
+your existing `.env` or shell environment. `OPENAI_MODEL` defaults to
+`gpt-4.1-nano`, an inexpensive model supporting structured output and tool
+calling. Change that setting and restart the server to select another compatible
+OpenAI model. Anthropic credentials are no longer used.
+
+Each model response is capped at 2,048 completion tokens, with a 30-second
+request timeout and at most one retry. Ingestion uses function calling with
+Pydantic validation; chat uses database-backed tools. API calls are billed to
+your OpenAI account. See the [official model pricing](https://developers.openai.com/api/docs/models/gpt-4.1-nano).
+
+The digest includes pending reviews due today or earlier. A newly captured
+entry's first checkpoint is scheduled for tomorrow and appears once it is due.
 
 ## LangSmith tracing
-
-The tracing helper is available; API integration arrives with the ingestion and query tickets.
-
 
 Tracing is optional and disabled by default. To enable it, add these settings
 to `.env` (or export them in your shell), then restart the API:
@@ -50,3 +126,10 @@ with trace_agent():
 See the [LangGraph tracing guide](https://docs.langchain.com/langsmith/trace-with-langgraph)
 for details. No extra decorators are needed on the existing LangChain tools or models.
 
+## Contributing
+
+Contributions are welcome — see [`CONTRIBUTING.md`](CONTRIBUTING.md) for the dev workflow and [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) for community standards. Work is tracked as tickets in [`tickets/`](tickets/README.md).
+
+## License
+
+[MIT](LICENSE)

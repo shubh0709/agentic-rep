@@ -10,13 +10,13 @@ Each ticket from SRA-104 onward is designed to leave you with something you can 
 
 | Ticket | Title | Blocked by | Status |
 |---|---|---|---|
-| [SRA-101](SRA-101-configuration.md) | Application configuration | — | Pending |
-| [SRA-102](SRA-102-spaced-repetition-scheduler.md) | Spaced-repetition scheduler | — | Pending |
-| [SRA-103](SRA-103-data-repository-layer.md) | Data repository layer | SRA-102 | Pending |
-| [SRA-104](SRA-104-api-skeleton.md) | API skeleton: app factory + digest + search | SRA-103 | Pending |
-| [SRA-105](SRA-105-ingestion-agent-and-route.md) | Ingestion LangGraph agent + ingest route | SRA-101, SRA-103, SRA-104 | Pending |
-| [SRA-106](SRA-106-query-agent-and-route.md) | Query LangGraph agent + chat route | SRA-101, SRA-103, SRA-104 | Pending |
-| [SRA-107](SRA-107-phase-1-integration-verification.md) | Phase 1 integration verification | SRA-105, SRA-106 | Pending |
+| [SRA-101](SRA-101-configuration.md) | Application configuration | — | Done |
+| [SRA-102](SRA-102-spaced-repetition-scheduler.md) | Spaced-repetition scheduler | — | Done |
+| [SRA-103](SRA-103-data-repository-layer.md) | Data repository layer | SRA-102 | Done |
+| [SRA-104](SRA-104-api-skeleton.md) | API skeleton: app factory + digest + search | SRA-103 | Done |
+| [SRA-105](SRA-105-ingestion-agent-and-route.md) | Ingestion LangGraph agent + ingest route | SRA-101, SRA-103, SRA-104 | Done; live OpenAI verified |
+| [SRA-106](SRA-106-query-agent-and-route.md) | Query LangGraph agent + chat route | SRA-101, SRA-103, SRA-104 | Done; live OpenAI verified |
+| [SRA-107](SRA-107-phase-1-integration-verification.md) | Phase 1 integration verification | SRA-105, SRA-106 | Done — 2026-10-07 |
 
 Suggested order, and what each step gives you to run:
 
