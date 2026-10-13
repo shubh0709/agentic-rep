@@ -8,6 +8,9 @@ dependencies = [
     "uvicorn[standard]>=0.32",
     "sqlmodel>=0.0.22",
     "pydantic-settings>=2.5",
+    "langchain>=0.3",
+    "langgraph>=0.2",
+    "langchain-openai>=1.0,<2",
 ]
 
 [project.optional-dependencies]
