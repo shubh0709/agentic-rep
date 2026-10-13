@@ -33,6 +33,14 @@ CI (`.github/workflows/ci.yml`) runs the same three checks on every push and
 PR, so `pre-commit` catches things locally and CI is the backstop if a hook
 was skipped or bypassed.
 
+Phase 2 is currently at the TDD scaffold stage: its functions are exercises and
+its tests intentionally fail until you implement them. Run
+`pytest -m 'not phase2' -q` to protect the completed Phase 1 behavior while working
+through the ticket-specific tests in [tests/README.md](tests/README.md). Keep
+implemented-ticket tests green; remaining Phase 2 failures stay visible in the
+full suite and CI. Do not add `xfail` or assert `NotImplementedError` to hide them.
+The full suite must be green before Phase 2 integration verification closes.
+
 ## Reproducible installs
 
 `pyproject.toml` declares dependencies as ranges (`fastapi>=0.115`, etc.), so
@@ -50,6 +58,13 @@ Regenerate it after adding or upgrading a dependency in `pyproject.toml`:
 pip install -e ".[dev]"
 pip freeze --exclude-editable > requirements-lock.txt
 ```
+
+This snapshot covers the server/dev environment. Phase 2 declares optional
+`capture` and macOS `desktop` extras, but they are not installed or represented
+in this snapshot yet. Default tests fake those external boundaries. Real Whisper
+checks explicitly opt in with `SRA_RUN_WHISPER_TESTS=1`; see the test guide for
+installation and fixture details. Record a verified optional-dependency snapshot
+when implementing the real capture setup instead of guessing package pins.
 
 ## Schema migrations (Alembic)
 

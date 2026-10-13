@@ -2,7 +2,7 @@
 
 An open-source, self-hostable study agent: capture what you studied, get it resurfaced on a spaced-repetition schedule, and quiz yourself on it — built with LangChain, LangGraph, and FastAPI.
 
-This repo ships as a **teaching scaffold**: every learning-target function is a typed stub with a docstring explaining what it does and what concept it exercises, paired with tests that currently fail (`NotImplementedError`) and become the correctness spec once you implement it. Non-learning-target plumbing (config loading, ORM models, DB sessions) is written out in full.
+This repo is a **teaching project**. Phase 1 is implemented and verified. Phase 2 now has tests and typed teaching stubs: you implement the functions, guided by their docstrings and failing assertions. Supporting plumbing (error types, protocols, configuration fields, ORM models, and DB sessions) is provided. See the [Phase 2 TDD guide](tests/README.md) for the implementation order and test commands.
 
 See [`docs/plans/`](docs/plans/) for the full implementation plan and [`docs/design/technical-design.md`](docs/design/technical-design.md) for the HLD/LLD/database/API design.
 
@@ -62,18 +62,36 @@ pre-commit install     # runs ruff + pyright on every commit — see CONTRIBUTIN
 cp .env.example .env   # first setup only; fill in OPENAI_API_KEY
 alembic upgrade head   # create the DB schema (see CONTRIBUTING.md for the migration workflow)
 
-pytest                 # everything fails with NotImplementedError right now — that's the spec
+pytest -m 'not phase2' -q  # existing Phase 1 regression tests
+pytest -q                 # includes intentionally red Phase 2 teaching contracts
 ```
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the dev workflow (lint/type-check/tests, reproducible installs, migrations) and the DB model conventions every new table should follow.
 
-Once you've implemented the Phase 1 stubs:
+The implemented Phase 1 API can already run:
 
 ```bash
 uvicorn sra.api.app:create_app --factory --reload
 ```
 
 Then `POST /api/v1/entries/ingest {"transcript": "..."}`, `GET /api/v1/digest`, `GET /api/v1/search?q=...`, `POST /api/v1/chat {"question": "..."}`.
+
+## Phase 2 — implement against the tests
+
+Start with [SRA-201](tickets/SRA-201-text-capture-api-client.md), then work through
+SRA-202–205. The HTTP client, transcription, pipeline, recorder, and menu-bar
+controller functions deliberately raise `NotImplementedError`. All their tests
+are supplied, including end-to-end flows through the real API/database/scheduler.
+The [test guide](tests/README.md) distinguishes unit, end-to-end, real Whisper,
+and manual desktop checks and explains the expected red/green workflow.
+
+Default tests only need `'.[dev]'`. Once implementing real audio, use
+`pip install -e '.[dev,capture]'`, or `'.[dev,desktop]'` on macOS for microphone
+and menu-bar dependencies. Client settings are `API_BASE_URL` (default
+`http://127.0.0.1:8000`, without `/api/v1`), `WHISPER_MODEL_SIZE` (`base`), and
+`HOTKEY_COMBO` (`<ctrl>+<alt>+r`). The client needs no server credentials.
+The complete desktop launch, permissions, and failure/recovery acceptance steps
+are in the tickets and remain unverified until those exercises are implemented.
 
 Both agents use OpenAI through `langchain-openai`. Set `OPENAI_API_KEY` in
 your existing `.env` or shell environment. `OPENAI_MODEL` defaults to

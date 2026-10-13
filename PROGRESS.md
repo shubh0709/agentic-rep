@@ -4,7 +4,7 @@ Working log for the phased build. Update this file whenever a phase's scope chan
 
 Build mode: **implementation in progress**. The phase checklists below record the original scaffold; implementation updates track completed functionality and current verification results.
 
-Per-module implementation work is tracked as tickets in [`tickets/`](tickets/README.md) (`SRA-1xx` = Phase 1, `SRA-2xx` = Phase 2, ...) — this file tracks phase/scaffold status, `tickets/` tracks the step-by-step implementation work within a phase once its scaffold exists.
+Implementation work is tracked as tickets in [`tickets/`](tickets/README.md) (`SRA-1xx` = Phase 1, `SRA-2xx` = Phase 2, ...) — this file tracks phase/scaffold status, `tickets/` tracks the step-by-step work within a phase. At the user's request, all Phase 2 tests and teaching stubs are prepared up front; the user implements the learning functions and verifies each ticket's complete manual flow.
 
 ## Implementation update — 2026-10-07
 
@@ -62,7 +62,24 @@ Ingestion agent + scheduler + minimal API, exercised via pasted transcript text 
 
 ## Phase 2 — Voice capture
 
-- [ ] Not started. `src/sra/capture/transcription.py` (local Whisper), `src/sra/capture/pipeline.py`, `src/sra/capture/menubar_app.py`, `src/sra/client/api_client.py`.
+**Status: TDD scaffold prepared on 2026-10-13; client configuration implemented, remaining learning functions unimplemented.** [SRA-201 through SRA-206](tickets/README.md#board--phase-2-voice-capture) cover the plan's U4/U5 and the technical design's client/server split. The assistant supplies tests and teaching docstrings; the user writes the implementations. Each implementation ticket must deliver its manual flow, verify newly created IDs through search, and record a failure/recovery check. Focused completed-ticket checks and Phase 1 regressions must stay green; future exercises intentionally keep the full suite red until implemented. See [tests/README.md](tests/README.md).
+
+- Added unit contracts for isolated configuration, HTTP validation/errors/no retries, lazy local inference, pipeline composition, recorder WAV/lifecycle/cleanup, and queued menu-bar controller behavior.
+- Added end-to-end tests through real client/transcription wrappers, FastAPI, graph, repository, SQLite, scheduling, search, and due-date digest. Only external inference and HTTP location are replaced; timeout-after-save, silence, failures, and recovery are included.
+- Added an original spoken WAV fixture and opt-in real Whisper integration test. Real model/device/hotkey checks remain pending and do not count as implemented functionality.
+- The base server/dev dependency snapshot remains unchanged; optional capture/desktop extras are declared but not installed or locked here.
+- **Scaffold verification — 2026-10-13:** added 150 Phase 2 cases (136 unit, 13 end-to-end, 1 opt-in Whisper integration). Full suite: **94 passed, 145 failed, 2 skipped**; every failure is the intended `NotImplementedError`, with no collection/setup errors. The skips are real Whisper opt-in and missing macOS desktop dependencies. Phase 1 independently remains **91 passed** using `pytest -m 'not phase2' -q`. Ruff, Pyright, and whitespace checks pass. No real Whisper/model download, microphone, or hotkey verification was performed.
+
+- **Client configuration update — 2026-10-13:** implemented independent cached desktop settings and HTTP(S) base URL validation. All **24 client configuration tests pass**; SRA-201 remains open for the HTTP wrapper and manual flow. Current full suite: **118 passed, 121 failed, 2 skipped**; all failures are remaining `NotImplementedError` exercises, with no collection/setup errors. Phase 1 remains **91 passed**; Ruff, Pyright, and whitespace checks pass.
+
+- [ ] [SRA-201](tickets/SRA-201-text-capture-api-client.md) — client config + `src/sra/client/api_client.py`: typed note → API → stored entries → search
+- [ ] [SRA-202](tickets/SRA-202-local-whisper-transcription.md) — `src/sra/capture/transcription.py`: real WAV → local Whisper → completed HTTP client → searchable entries
+- [ ] [SRA-203](tickets/SRA-203-recording-to-ingestion-pipeline.md) — `src/sra/capture/pipeline.py`: one-call audio ingestion, no-speech/error handling, storage and due-date digest checks
+- [ ] [SRA-204](tickets/SRA-204-microphone-capture.md) — `src/sra/capture/recording.py`: live microphone → terminal start/stop → pipeline → searchable entries, with cleanup
+- [ ] [SRA-205](tickets/SRA-205-menubar-hotkey-capture.md) — `src/sra/capture/menubar_app.py`: hotkey/UI around the proven recorder and pipeline, verified through search
+- [ ] [SRA-206](tickets/SRA-206-phase-2-integration-verification.md) — automated regression checks plus real desktop-to-digest verification
+
+Phase 2 retains Phase 1's single local user and server-side OpenAI agents. Only transcript text is submitted; raw audio stays local. Authentication remains Phase 3, and wake-up/TTS/voice quiz remain Phase 5. The scaffold and tests now exist; runtime behavior and manual verification remain incomplete.
 
 ## Phase 3 — Multi-tenancy, auth, RBAC, rate limiting
 

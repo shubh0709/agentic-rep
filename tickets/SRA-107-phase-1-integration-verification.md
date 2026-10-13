@@ -91,7 +91,7 @@ Search returned exactly Mitosis. The chat answers were:
 
 - [x] Mark Phase 1 as done in `PROGRESS.md`
 - [ ] Delete or reset the local `sra.db` file if you want a clean slate before starting Phase 2 (it's gitignored, so this is just local housekeeping)
-- [x] Ready to start Phase 2 (local Whisper transcription + the menu-bar hotkey client) — new tickets (`SRA-2xx`) will be created once that phase's scaffold exists
+- [x] Ready to start Phase 2 (local Whisper transcription + the menu-bar hotkey client) — [SRA-201 through SRA-206](README.md#board--phase-2-voice-capture) have tests and teaching stubs prepared; each implementation ticket delivers a manually verifiable flow
 
 ## Definition of Done
 

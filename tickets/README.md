@@ -2,7 +2,7 @@
 
 Work items for implementing the scaffold, one small module at a time — same idea as a JIRA board. Each `SRA-NNN-*.md` file is one ticket: what to implement, where to look, how to test that ticket in isolation, and its Definition of Done.
 
-Numbering follows the phase: `SRA-1xx` = Phase 1, `SRA-2xx` = Phase 2, and so on. Tickets for a phase are only created once that phase's scaffold exists (see `../PROGRESS.md` for phase status) — right now that's Phase 1 only.
+Numbering follows the phase: `SRA-1xx` = Phase 1, `SRA-2xx` = Phase 2, and so on. Phase 1 is implemented. Phase 2 tests and teaching stubs are prepared; the user implements the functions and verifies each complete flow. See the [TDD guide](../tests/README.md) and [`PROGRESS.md`](../PROGRESS.md) for the current state.
 
 ## Board — Phase 1 (Core loop)
 
@@ -43,6 +43,87 @@ flowchart LR
 
 ---
 
+## Board — Phase 2 (Voice capture)
+
+Every implementation ticket must finish with a complete flow a developer can run manually using completed prerequisites and that ticket's work. Each new boundary is connected to the already working app before the ticket closes. Each ticket includes concrete inputs/commands, observable output, a failure/recovery check, and a place to record the result.
+
+Learning-target functions are typed stubs with teaching docstrings. At the user's request, all tests and stubs are prepared up front so the user writes the implementation. Implement one ticket at a time, keeping its focused checks and Phase 1 regressions green. Later tickets' stubs intentionally fail in the full suite; all default tests must pass before SRA-206 closes. Manual checks use real components, while default automated tests substitute external inference and hardware.
+
+| Ticket | Title | Blocked by | Status |
+|---|---|---|---|
+| [SRA-201](SRA-201-text-capture-api-client.md) | Text capture through the HTTP client | SRA-107 (done) | Config implemented; HTTP client pending |
+| [SRA-202](SRA-202-local-whisper-transcription.md) | Local Whisper transcription into saved study entries | SRA-201 | TDD scaffold ready; implement |
+| [SRA-203](SRA-203-recording-to-ingestion-pipeline.md) | Recording-to-ingestion pipeline | SRA-202 | TDD scaffold ready; implement |
+| [SRA-204](SRA-204-microphone-capture.md) | Microphone capture through the working pipeline | SRA-203 | TDD scaffold ready; implement |
+| [SRA-205](SRA-205-menubar-hotkey-capture.md) | macOS menu-bar hotkey capture | SRA-204 | TDD scaffold ready; implement |
+| [SRA-206](SRA-206-phase-2-integration-verification.md) | Phase 2 integration verification | SRA-205 | To do — planned |
+
+Suggested order, and what each step gives you to run:
+
+1. **201** — submit a typed note through the Python HTTP client and retrieve the created entry IDs through search. Includes the client config/dependencies needed for that flow.
+2. **202** — transcribe a real saved WAV, send that transcript through the completed client, and retrieve its new entries through search.
+3. **203** — use one `process_recording` call for that audio-to-entry flow, with consistent no-speech/error behavior and automated storage/scheduling/digest verification.
+4. **204** — speak into the microphone and stop with Enter; verify the resulting entries and recording cleanup. The terminal entry point proves the recorder that the next ticket reuses.
+5. **205** — drive that same recorder/pipeline with the global hotkey while another app has focus; verify new entries, UI feedback, and recovery.
+6. **206** — repeat the whole desktop-to-digest flow, including restart and regression checks, and record phase completion.
+
+```mermaid
+flowchart LR
+    107[SRA-107 Phase 1 verified] --> 201[SRA-201 Text client to saved entries]
+    201 --> 202[SRA-202 Saved WAV to saved entries]
+    202 --> 203[SRA-203 Single-call audio pipeline]
+    203 --> 204[SRA-204 Microphone capture]
+    204 --> 205[SRA-205 Menu-bar hotkey capture]
+    205 --> 206[SRA-206 Integration verification]
+```
+
+### Required manual evidence for each ticket
+
+| Ticket | Run against real components | Observable success | Failure/recovery check |
+|---|---|---|---|
+| SRA-201 | Typed note → HTTP client → running server | Created IDs found through search | Unused port errors; restore URL and submit successfully |
+| SRA-202 | Fixture WAV → Whisper → client → server | Recognizable transcript and new IDs found through search | Missing file prevents submission; restore input and retry |
+| SRA-203 | WAV → one pipeline call → server | New IDs found through search; input file preserved | Missing input/unavailable server fail clearly; next valid call works |
+| SRA-204 | Live microphone → Enter to stop → pipeline → server | Spoken note saved and found by ID; microphone/file released | Cancel/deny permission/stop server, then recover |
+| SRA-205 | Hotkey from another app → microphone → pipeline → server | New IDs found; responsive recording/processing/result UI | Permission/server failure and rapid hotkeys recover without overlapping submissions |
+| SRA-206 | Full capture/search/chat/digest flow plus restart | Recorded IDs, transcripts, six schedules, due-date digest results | Error paths recover and capture still works after restart |
+
+The due-date checks use the next day's digest date in an isolated test; an immediate empty digest is expected for a new entry. Each ticket's **Verification record** must contain actual outcomes before closing it. A passing unit test, a saved-entry count alone, or an older matching search result is insufficient evidence. SRA-206 checks the complete phase again; earlier tickets must already be manually verified.
+
+### How this maps to the existing plan
+
+| Planned work | Ticket coverage |
+|---|---|
+| KTD1 / R10–R11: teaching stubs, docstrings, tests | Tests/stubs prepared; user implements each slice within SRA-201–205 |
+| KTD6: client configuration and configurable hotkey/model size | SRA-201 base URL; SRA-202 model size; SRA-205 hotkey |
+| U4 / R2; design §3.26: local Whisper, model cache, fixture, typed errors | SRA-202 |
+| Design §3.29: thin HTTP ingestion client | SRA-201 |
+| U5 refined by design §3.30: local transcription → remote ingestion | SRA-202 manual composition; SRA-203 reusable pipeline |
+| U5 / R1; design §3.31: macOS recording and global hotkey | SRA-204 recorder/terminal verification; SRA-205 menu-bar/hotkey integration |
+| Phase completion: voice capture → stored entries → scheduled reviews | Every ticket's manual result; SRA-203 due-date e2e test; SRA-206 final verification |
+
+The technical design's client/server split takes precedence over U5's earlier sketch of invoking an ingestion graph on the desktop. Phase 2 sends **transcript text** to the existing `POST /api/v1/entries/ingest`; audio stays local, and the backend runs the agents. Use Phase 1's current OpenAI setup and FastAPI response shapes where the older plan still names Claude or future API contracts.
+
+Phase 2 retains the single local user. OAuth/token storage, multi-tenancy, RBAC, and rate limiting are Phase 3; quiz generation is Phase 4; wake-up/TTS/voice quiz is Phase 5; Docker/distribution is Phase 6. The broader design's client methods for those features are not Phase 2 exercises.
+
+### Testing Phase 2 as it is implemented
+
+Files, tests, and optional `capture` / `desktop` dependency declarations are present. Runtime implementations and optional-dependency lock verification remain exercises. Default unit and e2e tests use fake inference/audio devices and isolated HTTP/DB wiring. The real Whisper fixture check is opt-in; real microphone, menu-bar permissions, and hotkey delivery are verified on macOS. Do not interpret a platform skip as completed desktop verification.
+
+After the corresponding tickets are implemented:
+
+```bash
+pytest tests/unit/test_client_config.py tests/unit/test_transcription.py tests/unit/test_api_client.py tests/unit/test_capture_pipeline.py tests/unit/test_recording.py -v
+pytest tests/e2e/test_client_ingestion_e2e.py tests/e2e/test_voice_capture_to_digest_e2e.py -v
+pytest tests/e2e/test_terminal_capture_e2e.py -v
+SRA_RUN_WHISPER_TESTS=1 pytest tests/integration/test_transcription_whisper.py -v
+pytest tests/unit/test_menubar_app.py -v
+```
+
+The ticket documents specify expected behavior; the prepared tests currently fail at the teaching stubs. Record actual passing results when implementing and verifying each ticket. Use `pytest -m 'not phase2' -q` for Phase 1 regressions during the red stage; the full suite stays visible.
+
+---
+
 ## Running the app
 
 ```bash
@@ -62,13 +143,13 @@ Every ticket names its own test file. Run just that file, verbosely, while you w
 pytest tests/unit/test_scheduler.py -v
 ```
 
-A stub that still raises `NotImplementedError` makes its tests fail (or error, for API/e2e tests whose fixtures depend on it) — that's the expected starting state. A ticket is done when its own test file is fully green.
+A stub that still raises `NotImplementedError` makes its tests fail (or error, for API/e2e tests whose fixtures depend on it) — that's the expected starting state once the scaffold exists. A ticket is done when its focused tests, acceptance criteria, manual checks, and Definition of Done are satisfied.
 
 ## Testing the whole app
 
 ```bash
 pytest -q                 # everything: unit + e2e
-pytest -q tests/e2e/      # just the end-to-end flows (needs SRA-101 through SRA-107 all done)
+pytest -q tests/e2e/      # end-to-end flows for the scaffolded phases
 ```
 
 Manual smoke test once the server is running (`uvicorn ...` above), in a second terminal:
