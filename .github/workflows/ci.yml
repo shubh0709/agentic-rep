@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Lint (ruff)
+        run: ruff check .
+
+      - name: Type check (pyright)
+        run: pyright
+
+      - name: Test (pytest)
+        run: pytest
+
+      - name: Check requirements-lock.txt is up to date
+        run: |
+          pip freeze --exclude-editable > /tmp/requirements-lock.txt
+          diff -u requirements-lock.txt /tmp/requirements-lock.txt || {
+            echo "::error::requirements-lock.txt is stale. Regenerate it with:"
+            echo "::error::pip install -e \".[dev]\" && pip freeze --exclude-editable > requirements-lock.txt"
+            exit 1
+          }

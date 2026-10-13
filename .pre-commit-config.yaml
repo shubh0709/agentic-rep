@@ -1,0 +1,15 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.9
+    hooks:
+      - id: ruff
+        args: [--fix]
+
+  - repo: https://github.com/RobertCraigie/pyright-python
+    rev: v1.1.414
+    hooks:
+      - id: pyright
+        # No additional_dependencies: pyproject.toml's [tool.pyright]
+        # points venvPath/venv at the project's own .venv, so pyright
+        # resolves imports from there regardless of which environment
+        # invoked the pyright binary.
