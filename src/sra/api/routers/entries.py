@@ -1,6 +1,8 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session
 
+from sra.agents.ingestion_graph import IngestionState, build_ingestion_graph
+from sra.agents.tracing import trace_agent
 from sra.api.deps import get_current_user, get_session
 from sra.api.schemas import EntryOut, IngestRequest
 from sra.db.models import User
@@ -25,4 +27,32 @@ def ingest_transcript(
       3. Map result["entries"] (StudyEntry rows) into EntryOut and return them.
          If result["error"] is set instead, raise HTTPException(422, detail=result["error"]).
     """
-    raise NotImplementedError
+    assert user.id is not None
+    initial_state: IngestionState = {
+        "transcript": body.transcript,
+        "user_id": user.id,
+        "session": session,
+        "drafts": [],
+        "entries": [],
+        "error": None,
+    }
+    graph = build_ingestion_graph()
+    with trace_agent():
+        result = graph.invoke(initial_state)
+    if result["error"]:
+        raise HTTPException(status_code=422, detail=result["error"])
+
+    out = []
+    for entry in result["entries"]:
+        assert entry.id is not None
+        out.append(
+            EntryOut(
+                id=entry.id,
+                topic=entry.topic,
+                subtopic=entry.subtopic,
+                tags=entry.tags,
+                summary=entry.summary,
+                created_at=entry.created_at,
+            )
+        )
+    return out
