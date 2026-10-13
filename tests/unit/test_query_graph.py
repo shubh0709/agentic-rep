@@ -1,5 +1,8 @@
 from datetime import date
 
+import pytest
+from langchain_core.messages import AIMessage, ToolMessage
+
 from sra.agents.query_graph import build_query_graph
 from sra.db.models import ReviewSchedule, StudyEntry
 
@@ -112,7 +115,70 @@ class ScriptedModel:
         return next(self.responses)
 
 
+def test_graph_passes_real_tool_results_back_to_model_across_multiple_rounds(monkeypatch, session, seeded_user, other_user):
+    entry = StudyEntry(user_id=seeded_user.id, topic="Mitosis", summary="Cell division", raw_transcript="Detailed phases")
+    session.add_all([
+        entry,
+        StudyEntry(user_id=other_user.id, topic="Private topic", summary="Secret", raw_transcript="Private notes"),
+    ])
+    session.commit()
+    model = ScriptedModel([
+        AIMessage(content="", tool_calls=[
+            {"name": "search_entries_tool", "args": {"query": "", "user_id": other_user.id}, "id": "search"},
+            {"name": "get_due_reviews_tool", "args": {"as_of": "2026-10-07"}, "id": "due"},
+        ]),
+        AIMessage(content="", tool_calls=[
+            {"name": "get_entry_detail_tool", "args": {"entry_id": entry.id}, "id": "detail"},
+        ]),
+        AIMessage(content="You studied mitosis."),
+    ])
+    monkeypatch.setattr("sra.agents.query_graph._get_chat_model", lambda: model)
+
+    result = build_query_graph(seeded_user.id, session).invoke({"messages": [("user", "What did I study?")]})
+
+    assert len(model.received_messages) == 3
+    second_turn_results = [m for m in model.received_messages[1] if isinstance(m, ToolMessage)]
+    assert [m.tool_call_id for m in second_turn_results] == ["search", "due"]
+    assert "Mitosis" in second_turn_results[0].text
+    assert "Private" not in second_turn_results[0].text
+    assert "Detailed phases" not in second_turn_results[0].text
+    assert "No review entries" in second_turn_results[1].text
+    third_turn_results = [m for m in model.received_messages[2] if isinstance(m, ToolMessage)]
+    assert [m.tool_call_id for m in third_turn_results] == ["search", "due", "detail"]
+    assert "Detailed phases" in third_turn_results[-1].text
+    assert result["messages"][-1].text == "You studied mitosis."
 
 
+@pytest.mark.parametrize(("tool_name", "arguments"), [
+    ("unknown_tool", {}),
+    ("get_due_reviews_tool", {}),
+    ("get_due_reviews_tool", {"as_of": "2026-02-30"}),
+])
+def test_graph_returns_tool_errors_to_model_for_correction(monkeypatch, session, seeded_user, tool_name, arguments):
+    model = ScriptedModel([
+        AIMessage(content="", tool_calls=[{"name": tool_name, "args": arguments, "id": "bad"}]),
+        AIMessage(content="", tool_calls=[
+            {"name": "get_due_reviews_tool", "args": {"as_of": "2026-10-07"}, "id": "corrected"},
+        ]),
+        AIMessage(content="No reviews are due."),
+    ])
+    monkeypatch.setattr("sra.agents.query_graph._get_chat_model", lambda: model)
+
+    result = build_query_graph(seeded_user.id, session).invoke({"messages": [("user", "What's due?")]})
+
+    error = model.received_messages[1][-1]
+    assert isinstance(error, ToolMessage) and error.status == "error" and error.tool_call_id == "bad"
+    corrected = model.received_messages[2][-1]
+    assert isinstance(corrected, ToolMessage) and corrected.status == "success"
+    assert result["messages"][-1].text == "No reviews are due."
 
 
+def test_graph_finishes_without_tool_calls(monkeypatch, session, seeded_user):
+    model = ScriptedModel([AIMessage(content="Hello! Ask me about your study history.")])
+    monkeypatch.setattr("sra.agents.query_graph._get_chat_model", lambda: model)
+
+    result = build_query_graph(seeded_user.id, session).invoke({"messages": [("user", "Hello")]})
+
+    assert len(model.received_messages) == 1
+    assert not any(isinstance(m, ToolMessage) for m in result["messages"])
+    assert result["messages"][-1].text.startswith("Hello!")
