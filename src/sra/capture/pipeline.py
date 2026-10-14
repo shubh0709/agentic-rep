@@ -3,9 +3,9 @@
 from pathlib import Path
 from typing import Any
 
-from sra.capture.transcription import transcribe  # noqa: F401 (learning stub seam)
-from sra.client import api_client  # noqa: F401 (learning stub seam)
-from sra.config import get_client_settings  # noqa: F401 (learning stub seam)
+from sra.capture.transcription import transcribe
+from sra.client import api_client
+from sra.config import get_client_settings
 
 
 def process_recording(audio_path: Path) -> list[dict[str, Any]]:
@@ -22,4 +22,8 @@ def process_recording(audio_path: Path) -> list[dict[str, Any]]:
     this function, the real transcription wrapper, and the real HTTP client
     through the API, repository, and scheduler with external inference replaced.
     """
-    raise NotImplementedError("SRA-203: compose transcription and API ingestion")
+    settings = get_client_settings()
+    transcript = transcribe(audio_path, model_size=settings.whisper_model_size)
+    if not transcript.strip():
+        return []
+    return api_client.ingest_transcript(transcript)

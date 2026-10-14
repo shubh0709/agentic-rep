@@ -3,7 +3,7 @@
 **Type:** Task
 **Phase:** 2 — Voice capture
 **Priority:** High — gives capture callers one complete operation
-**Status:** TDD scaffold ready — user implementation pending
+**Status:** Implemented — automated verification complete; live API submission pending explicit approval
 **Blocked by:** SRA-202 (transitively: SRA-201)
 **Blocks:** SRA-204
 
@@ -85,12 +85,12 @@ That test checks more than a return value. It compares response IDs to stored ro
 
 ## Acceptance criteria
 
-- [ ] The configured model size reaches transcription and one nonempty transcript produces one HTTP submission
-- [ ] No speech returns `[]` with no submission; transcription/API errors preserve their typed failure and never trigger retries
-- [ ] The supplied audio file remains intact on success, no-speech, and failure
-- [ ] The e2e test proves stored transcript/ownership, six pending reviews, immediate search, no new review due on capture day, and `1d` reviews visible on the next day
+- [x] The configured model size reaches transcription and one nonempty transcript produces one HTTP submission
+- [x] No speech returns `[]` with no submission; transcription/API errors preserve their typed failure and never trigger retries
+- [x] The supplied audio file remains intact on success, no-speech, and failure
+- [x] The e2e test proves stored transcript/ownership, six pending reviews, immediate search, no new review due on capture day, and `1d` reviews visible on the next day
 - [ ] The single-call manual flow below creates searchable entries from real audio against the running backend
-- [ ] A missing input and an unreachable server report failures; restoring the input/server allows the next call to succeed
+- [x] A missing input and an unreachable server report failures; restoring the input/server allows the next call to succeed
 
 ## How to test this ticket alone
 
@@ -132,10 +132,10 @@ Expect new IDs found in search and an unchanged input file. Repeat with a nonexi
 
 ## Verification record
 
-- Date, audio path/model, and commands used:
-- Created entry IDs and matching search IDs:
-- Input-file preservation, missing-file/server failure, and recovery results:
-- E2e scheduling/digest result and full test/lint/type-check results:
+- Date, audio path/model, and commands used: 2026-10-13; deterministic WAV/model boundary via `pytest tests/unit/test_capture_pipeline.py tests/e2e/test_voice_capture_to_digest_e2e.py -v`. The real `tests/fixtures/study_note.wav` and `faster-whisper` are available, but sending its transcript to the configured external OpenAI service was not authorized, so the live submission was not run.
+- Created entry IDs and matching search IDs: the isolated e2e flow created two unique IDs and found each exact ID through the real search route; live external-service IDs remain pending.
+- Input-file preservation, missing-file/server failure, and recovery results: all automated success, silence, late-decoder failure, missing-file, server-rejection, and subsequent-call recovery assertions passed; every caller-owned input remained byte-for-byte intact.
+- E2e scheduling/digest result and full test/lint/type-check results: **15 SRA-203 focused tests passed**; **108 completed-ticket tests passed**; **91 Phase 1 regressions passed**; Ruff and Pyright passed. The e2e flow verified the original transcript, local-user ownership, six pending reviews per entry, immediate search, an empty capture-day digest, and both `1d` reviews the next day without schedule mutation. Full suite: **200 passed, 46 failed, 2 skipped**; all failures are the intentional SRA-204/SRA-205 teaching stubs.
 
 ## Definition of Done
 
