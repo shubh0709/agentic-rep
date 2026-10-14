@@ -27,15 +27,16 @@ class PregenerationSummary(TypedDict):
     errors: int
 
 
-def _resolve_user_quiz_preferences(_user: User) -> tuple[int, int]:
+def _resolve_user_quiz_preferences(user: User, session: Session) -> tuple[int, int]:
     """Return (question_count, option_count) for this user.
 
-    Today this returns the design defaults from section 3.24 of the technical
-    design. The user table does not yet carry ``quiz_question_count`` /
-    ``quiz_option_count`` columns; once the preferences ticket lands, this
-    helper is the seam to replace so call sites do not have to move.
+    Reads the persisted per-user preferences via ``repository.get_user_preferences``.
+    Defaults ("09:00", "UTC", 10, 4) live on the ``User`` model itself, so a
+    fresh row returns the same counts the Phase 4 design used to hard-code.
     """
-    return 10, 4
+    assert user.id is not None
+    prefs = repository.get_user_preferences(user.id, session)
+    return prefs["quiz_question_count"], prefs["quiz_option_count"]
 
 
 def pregenerate_quizzes_for_user(
@@ -49,8 +50,10 @@ def pregenerate_quizzes_for_user(
     Reuses ``repository.get_due_reviews`` so the definition of "due today"
     matches the digest route. Distinct entry ids collapse to one quiz set
     per entry, regardless of how many review checkpoints are pending.
-    Per-entry LLM failures are caught and counted without aborting the loop.
+Per-entry LLM failures are caught and counted without aborting the loop.
     """
+    assert user.id is not None
+
     summary: PregenerationSummary = {
         "users": 0,
         "entries_seen": 0,
@@ -59,8 +62,7 @@ def pregenerate_quizzes_for_user(
         "errors": 0,
     }
 
-    question_count, option_count = _resolve_user_quiz_preferences(user)
-
+    question_count, option_count = _resolve_user_quiz_preferences(user, session)
     reviews = repository.get_due_reviews(user.id, today, session)
     due_entry_ids: set[int] = {r.entry_id for r in reviews if r.entry_id is not None}
 

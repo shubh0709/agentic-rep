@@ -61,8 +61,10 @@ def test_upgrade_preserves_phase2_data_and_supports_explicit_legacy_link(monkeyp
     backup = tmp_path / "phase2-backup.db"
     copy2(database, backup)  # All seeding connections are closed before copying.
 
-    command.upgrade(config, "head")
-    command.check(config)
+    # Phase 5 (SRA-501) added preferences columns after the Phase 3 revision;
+    # this test scopes itself to the Phase 3 boundary so the head run keeps
+    # applying only the OAuth-identity migration it was written to verify.
+    command.upgrade(config, PHASE3_REVISION)
 
     engine = create_engine(f"sqlite:///{database}")
     inspector = inspect(engine)
@@ -118,7 +120,9 @@ def test_downgrade_documents_identity_loss_but_preserves_owned_rows(monkeypatch,
     database = tmp_path / "phase3-downgrade.db"
     config = _alembic_config(monkeypatch, database)
     _seed_phase2_database(config, database)
-    command.upgrade(config, "head")
+    # See upgrade test above: scope to the Phase 3 boundary so head includes
+    # only the OAuth-identity migration this ticket covers.
+    command.upgrade(config, PHASE3_REVISION)
 
     engine = create_engine(f"sqlite:///{database}")
     with engine.begin() as connection:

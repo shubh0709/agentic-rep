@@ -41,7 +41,7 @@ def test_mcq_draft_correct_option_index_must_be_non_negative_integer():
 
 def test_mcq_draft_correct_option_index_must_be_integer():
     with pytest.raises(ValidationError):
-        MCQDraft(question_text="x", options=["a"], correct_option_index="0")
+        MCQDraft(question_text="x", options=["a"], correct_option_index="0")  # pyright: ignore[reportArgumentType]
 
 
 def test_mcq_drafts_carries_a_list_of_drafts():

@@ -107,6 +107,7 @@ def test_get_quiz_set_returns_none_for_another_user(session, seeded_user, other_
         option_count=4,
         drafts=_drafts(1, option_count=4),
     )
+    assert quiz_set.id is not None
 
     result = repository.get_quiz_set(other_user.id, quiz_set.id, session)
 
@@ -124,6 +125,7 @@ def test_get_quiz_set_returns_set_for_owner(session, seeded_user):
         option_count=4,
         drafts=_drafts(1, option_count=4),
     )
+    assert quiz_set.id is not None
 
     result = repository.get_quiz_set(seeded_user.id, quiz_set.id, session)
 
@@ -186,6 +188,7 @@ def test_save_quiz_answer_enforces_uniqueness(session, seeded_user):
         option_count=4,
         drafts=_drafts(1, option_count=4),
     )
+    assert quiz_set.id is not None
     question = session.exec(select(QuizQuestion).where(QuizQuestion.quiz_set_id == quiz_set.id)).one()
     attempt = QuizAttempt(quiz_set_id=quiz_set.id, user_id=seeded_user.id, total_questions=1)
     session.add(attempt)
@@ -222,6 +225,7 @@ def test_save_quiz_answer_records_selected_index_and_correctness(session, seeded
         option_count=4,
         drafts=_drafts(1, option_count=4),
     )
+    assert quiz_set.id is not None
     question = session.exec(select(QuizQuestion).where(QuizQuestion.quiz_set_id == quiz_set.id)).one()
     attempt = QuizAttempt(quiz_set_id=quiz_set.id, user_id=seeded_user.id, total_questions=1)
     session.add(attempt)
@@ -256,6 +260,7 @@ def test_complete_quiz_attempt_stamps_completed_at_and_score(session, seeded_use
         option_count=4,
         drafts=_drafts(2, option_count=4),
     )
+    assert quiz_set.id is not None
     attempt = QuizAttempt(quiz_set_id=quiz_set.id, user_id=seeded_user.id, total_questions=2)
     session.add(attempt)
     session.commit()
@@ -281,6 +286,7 @@ def test_get_quiz_attempt_enforces_ownership(session, seeded_user, other_user):
         option_count=4,
         drafts=_drafts(1, option_count=4),
     )
+    assert quiz_set.id is not None
     attempt = QuizAttempt(quiz_set_id=quiz_set.id, user_id=seeded_user.id, total_questions=1)
     session.add(attempt)
     session.commit()

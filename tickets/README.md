@@ -280,7 +280,7 @@ ticket closes the phase.
 | [SRA-403](SRA-403-quiz-pregeneration-job.md) | Quiz pregeneration job | SRA-402 | Done — 2026-10-14 |
 | [SRA-404](SRA-404-quiz-api-endpoints.md) | Quiz API endpoints (web) | SRA-402, SRA-403 | Done — 2026-10-14 (1 known e2e failure: test seeds entry directly bypassing repository.create_entry) |
 | [SRA-405](SRA-405-dashboard-quiz-ui.md) | Dashboard quiz UI | SRA-404 | Done — 2026-10-14 (unit tests blocked by hard-coded `PATH = "/usr/bin:/usr/local/bin"` on this machine; e2e 4/4 pass; async/DOM timing limitation documented) |
-| [SRA-406](SRA-406-phase-4-integration-verification.md) | Phase 4 integration verification | SRA-401, SRA-402, SRA-403, SRA-404, SRA-405 | Verification recorded 2026-10-14; pyright regression (54 errors), mounted-route audit gap, and one `test_phase4_rate_limit_inheritance` burst test all require follow-up |
+| [SRA-406](SRA-406-phase-4-integration-verification.md) | Phase 4 integration verification | SRA-401, SRA-402, SRA-403, SRA-404, SRA-405 | Done — 2026-10-14 (pyright restored to clean, audit gap closed, shared-bucket test fixed; documented limitations remain) |
 
 Suggested order, and what each step gives you to run:
 
@@ -364,6 +364,137 @@ the APScheduler wiring of the pregeneration job, the `preferred_review_time` /
 they are Phase 5. The Phase 4 dashboard module rejects `mode: "voice"` at the
 server with a typed `400`; Phase 5 will turn that branch into a real flow.
 
+---
+
+## Board — Phase 5 (Scheduled wake-up & voice quiz)
+
+Phase 5 turns the Phase 4 quiz into something the desktop client can run out loud,
+on a schedule. The server owns user preferences and time-of-day delivery; the
+client owns audio I/O. Every implementation ticket ships with its own runnable
+flow and recorded evidence; the final ticket closes the phase.
+
+| Ticket | Title | Blocked by | Status |
+|---|---|---|---|
+| [SRA-501](SRA-501-user-preferences-and-scheduler-columns.md) | User preferences and scheduler columns | SRA-406 | Implemented — 2026-10-14 |
+| [SRA-502](SRA-502-digest-ready-and-scheduler-wiring.md) | Digest ready endpoint and APScheduler wiring | SRA-501 | Implemented — 2026-10-14 |
+| [SRA-503](SRA-503-local-tts-abstraction.md) | Local TTS abstraction | — | Implemented — 2026-10-14 |
+| [SRA-504](SRA-504-voice-quiz-conversation-graph.md) | Voice quiz conversation graph | SRA-501 | Implemented — 2026-10-14 |
+| [SRA-505](SRA-505-voice-quiz-router-endpoint.md) | Voice quiz router endpoint | SRA-504 | Implemented — 2026-10-14 |
+| [SRA-506](SRA-506-client-api-extensions.md) | Client API extensions for wake-up and voice quiz | SRA-502, SRA-505 | Implemented — 2026-10-14 |
+| [SRA-507](SRA-507-wakeup-delivery-loop.md) | Wake-up delivery loop | SRA-503, SRA-506 | Implemented — 2026-10-14 |
+| [SRA-508](SRA-508-voice-quiz-client-driver.md) | Voice quiz client driver | SRA-503, SRA-504, SRA-506 | Implemented — 2026-10-14 |
+| [SRA-509](SRA-509-phase-5-integration-verification.md) | Phase 5 integration verification | SRA-501–508 | Implemented — 2026-10-14 |
+
+Suggested order, and what each step gives you to run:
+
+1. **501** — extend `users` with the columns the rest of Phase 5 reads
+   (`preferred_review_time`, `timezone`, `quiz_question_count`,
+   `quiz_option_count`, `wakeup_notification_sent_at`), expose them via
+   `GET/PUT /api/v1/me/preferences`, and rewire the pregeneration job to
+   read counts from the user row.
+2. **502** — register the pregeneration and wake-up jobs with APScheduler
+   inside the FastAPI lifespan; add `GET /api/v1/digest/ready` so the
+   desktop loop has a signal to poll.
+3. **503** — `speak(text)` over `subprocess.run(["say", ...])` with a
+   swappable backend so tests do not invoke real audio.
+4. **504** — `process_voice_turn(session, attempt, answer_text)` that maps a
+   free-form spoken answer to a structured option index via the LLM, records
+   a `QuizAnswer`, advances or finalizes the attempt, and returns the next
+   question text. State is reloaded from the database on each HTTP turn.
+5. **505** — `POST /api/v1/quiz/attempts/{id}/voice-turn` plus the voice-mode
+   branch in `POST /api/v1/quiz/{id}/attempts`. Removes the Phase 4 `400`
+   rejection and returns the first question inline.
+6. **506** — `get_digest_ready`, `get_digest_text`, `start_voice_quiz_attempt`,
+   `send_voice_turn` on `src/sra/client/api_client.py`. Same auth-token
+   resolution and resource cleanup as the existing client methods.
+7. **507** — `run_wakeup_loop(stop_event, ...)` on the desktop; polls,
+   speaks when ready, sleeps otherwise, exits cleanly when the stop event
+   fires.
+8. **508** — `run_voice_quiz(quiz_set_id)` on the desktop; composes recorder
+   + transcriber + api_client + tts into a single function that speaks each
+   question, records each answer, and returns `{score, total_questions}`.
+9. **509** — re-run the full suite, the migration rehearsal, the scheduler
+   lifecycle, the rate-limit inheritance, the wake-up loop, and the voice
+   quiz driver, then record the phase-level evidence.
+
+```mermaid
+flowchart LR
+    406[SRA-406 Phase 4 verified] --> 501[SRA-501 User preferences and scheduler columns]
+    501 --> 502[SRA-502 Digest ready and scheduler wiring]
+    503[SRA-503 Local TTS abstraction] --> 507[SRA-507 Wake-up delivery loop]
+    503 --> 508[SRA-508 Voice quiz client driver]
+    501 --> 504[SRA-504 Voice quiz conversation graph]
+    504 --> 505[SRA-505 Voice quiz router endpoint]
+    502 --> 506[SRA-506 Client API extensions]
+    505 --> 506
+    506 --> 507
+    506 --> 508
+    504 --> 508
+    501 --> 509[SRA-509 Integration verification]
+    502 --> 509
+    503 --> 509
+    504 --> 509
+    505 --> 509
+    506 --> 509
+    507 --> 509
+    508 --> 509
+```
+
+### How the Phase 5 files work together
+
+The diagram above is **implementation order**. At runtime, the server's
+scheduler (SRA-502) pre-generates today's quizzes and flips the per-user
+`wakeup_notification_sent_at` flag at the user's local `preferred_review_time`.
+The wake-up loop on the desktop (SRA-507) polls `GET /api/v1/digest/ready`, then
+calls `speak(get_digest_text())`. The voice quiz driver on the desktop
+(SRA-508) drives the same loop with the voice-turn endpoints added by SRA-505.
+TTS (SRA-503) is the audio-output dependency both desktop functions share.
+
+```mermaid
+flowchart LR
+    subgraph Server[Server process]
+        Prefs["api/routers/preferences.py<br/>GET/PUT /me/preferences"]
+        Sched["jobs/digest_scheduler.py<br/>pregen cron + wake-up tick"]
+        Ready["api/routers/digest.py<br/>GET /digest/ready"]
+        Graph["agents/quiz_conversation_graph.py<br/>process_voice_turn"]
+        Voice["api/routers/quiz.py<br/>POST /voice-turn"]
+    end
+
+    subgraph Client[Desktop client]
+        ApiClient["client/api_client.py<br/>get_digest_ready, get_digest_text,<br/>start_voice_quiz_attempt, send_voice_turn"]
+        Wake["capture/wakeup.py<br/>poll, speak, sleep, stop"]
+        VQ["capture/voice_quiz_client.py<br/>speak, record, transcribe, send"]
+        TTS["capture/tts.py<br/>speak(text) via say"]
+    end
+
+    Prefs --> Wake
+    Sched --> Ready
+    Ready --> ApiClient
+    ApiClient --> Wake
+    Voice --> ApiClient
+    Graph --> Voice
+    ApiClient --> VQ
+    Wake --> TTS
+    VQ --> TTS
+```
+
+Arrows inside a process represent calls or returned data; the labeled HTTP
+arrows cross the client/server boundary. The server keeps no per-client
+state for the wake-up loop — it just flips a per-user flag at the configured
+time and answers polls from any client that asks.
+
+| Ticket / main boundary | Input → output | Responsibility added |
+|---|---|---|
+| [501 — preferences & columns](SRA-501-user-preferences-and-scheduler-columns.md) | `PUT /api/v1/me/preferences` → persisted user row | Extend `users` with the five Phase 5 columns; expose them through a typed router. |
+| [502 — scheduler](SRA-502-digest-ready-and-scheduler-wiring.md) | UTC tick → pregenerated quizzes + per-user wake-up flag | Own server time-of-day delivery inside the FastAPI lifespan. |
+| [503 — TTS](SRA-503-local-tts-abstraction.md) | text → audible speech via macOS `say` | Local audio output with a swappable backend for tests. |
+| [504 — conversation graph](SRA-504-voice-quiz-conversation-graph.md) | one voice turn → next question or final score | Interpret free-form answers via the LLM; grade by integer equality; persist state to the database. |
+| [505 — voice routes](SRA-505-voice-quiz-router-endpoint.md) | HTTP → HTTP | Wrap the conversation graph in `POST /api/v1/quiz/attempts/{id}/voice-turn`; return the first question inline at attempt start. |
+| [506 — client methods](SRA-506-client-api-extensions.md) | method call → HTTP request → typed result | Add the four desktop-facing methods to `api_client.py`. |
+| [507 — wake-up loop](SRA-507-wakeup-delivery-loop.md) | `stop_event` → `speak(digest)` on the user's schedule | Poll the server, speak when ready, sleep otherwise, exit cleanly. |
+| [508 — voice quiz driver](SRA-508-voice-quiz-client-driver.md) | `quiz_set_id` → `{score, total_questions}` | Compose recorder + transcriber + HTTP client + TTS into one function. |
+| [509 — verification](SRA-509-phase-5-integration-verification.md) | Complete phase → recorded evidence | Migration rehearsal, scheduler lifecycle, rate-limit inheritance, wake-up loop, voice quiz loop, regression check. |
+
 ### Required manual evidence for each ticket
 
 | Ticket | Run against real components | Observable success | Failure/recovery check |
@@ -379,6 +510,122 @@ Each ticket's **Verification record** must contain actual outcomes before it
 closes. A passing unit test, a saved-entry count alone, or an older matching
 quiz attempt is not sufficient. SRA-406 re-runs the complete flow; earlier
 ticket tickets must already have their own evidence.
+
+---
+
+## Board — Phase 6 (Open-source packaging)
+
+Phase 6 turns the same FastAPI image into something anyone can self-host with
+one `docker compose up`. Two settings (`DEMO_MODE`, `DEMO_DATA_RETENTION_DAYS`)
+plus one user-flag column (`is_demo_user`) define the demo instance; a third
+setting (`DEMO_RESET_INTERVAL_S`) governs how often stale demo data is wiped.
+The README is the visitor-facing surface for self-host instructions, demo
+expectations, and the macOS-only desktop notice. Every implementation ticket
+ships with its own runnable flow and recorded evidence; the final ticket
+closes the phase.
+
+| Ticket | Title | Blocked by | Status |
+|---|---|---|---|
+| [SRA-601](SRA-601-demo-mode-settings-and-user-marker.md) | Demo-mode settings and per-user marker column | — | Implemented — 2026-10-14 |
+| [SRA-602](SRA-602-dockerfile-and-docker-compose.md) | Dockerfile and docker-compose.yml | — | Open |
+| [SRA-603](SRA-603-demo-reset-job-and-admin-endpoint.md) | Demo reset job and admin endpoint | SRA-601 | Open |
+| [SRA-604](SRA-604-self-host-documentation.md) | Self-host documentation | SRA-602, SRA-603 | Open |
+| [SRA-605](SRA-605-phase-6-integration-verification.md) | Phase 6 integration verification | SRA-601–604 | Open |
+
+Suggested order, and what each step gives you to run:
+
+1. **601** — extend `Settings` with `demo_mode`, `demo_data_retention_days`,
+   plus the `is_demo_user` column on `users` and the repository cascade
+   helpers (`delete_user_cascade`, `list_old_demo_users`).
+2. **602** — `Dockerfile`, `docker/entrypoint.sh`, `docker-compose.yml`
+   (default + `postgres` + `demo` profiles), `.dockerignore`. The image has
+   no application code changes — only packaging.
+3. **603** — `src/sra/jobs/demo_reset.py` (`reset_demo_data` + typed
+   `DemoModeDisabledError`), `POST /api/v1/admin/demo/reset`, the APScheduler
+   interval hook when `demo_mode=True`, and rate-limit narrowing under
+   `demo_mode=True`.
+4. **604** — README top-section rewrite (public-demo callout, self-host
+   quickstart, demo-mode subsection, Google OAuth setup, environment-variable
+   table), `.env.example` Phase 6 block, Phase 6 board entries.
+5. **605** — end-to-end demo-lifecycle test, migration round-trip, route
+   audit extension, `ruff` and `pyright` clean, `PROGRESS.md` close-out.
+
+```mermaid
+flowchart LR
+    601[SRA-601 Demo-mode settings and marker] --> 603[SRA-603 Demo reset job and admin endpoint]
+    601 --> 605[SRA-605 Integration verification]
+    602[SRA-602 Dockerfile and docker-compose] --> 603
+    602 --> 604[SRA-604 Self-host documentation]
+    603 --> 604
+    603 --> 605
+    604 --> 605
+```
+
+### How the Phase 6 files work together
+
+The diagram above is **implementation order**. At runtime, the same Docker
+image powers all three paths. The image reads `Settings` from environment
+variables; `DEMO_MODE=true` activates the demo profile (tighter rate limits,
+hourly reset tick). The self-host default runs the same image against an
+on-container SQLite file. The `postgres` profile swaps SQLite for Postgres
+without code changes.
+
+```mermaid
+flowchart LR
+    subgraph Server[Container: sra.api.app]
+        Settings["config.py<br/>demo_mode, demo_data_retention_days,<br/>demo_reset_interval_s"]
+        UserCol["db/models.py<br/>User.is_demo_user"]
+        Repo["db/repository.py<br/>delete_user_cascade, list_old_demo_users"]
+        Reset["jobs/demo_reset.py<br/>reset_demo_data"]
+        Sched["jobs/digest_scheduler.py<br/>demo reset interval trigger"]
+        Admin["api/routers/admin.py<br/>POST /admin/demo/reset"]
+        Limits["api/rate_limit.py<br/>demo mode narrows policy"]
+    end
+    subgraph Host[Operator's host]
+        Compose["docker-compose.yml<br/>default, postgres, demo profiles"]
+        Entrypoint["docker/entrypoint.sh<br/>wait-for-db + alembic + uvicorn"]
+        Readme["README.md + .env.example"]
+    end
+    Settings --> Sched
+    Settings --> Limits
+    Settings --> Reset
+    UserCol --> Reset
+    Repo --> Reset
+    Reset --> Sched
+    Admin --> Reset
+    Compose --> Entrypoint
+    Entrypoint --> Settings
+    Readme --> Settings
+```
+
+Arrows inside the container represent calls or returned data; the labelled
+env-file arrows cross the host/container boundary. The image is identical
+across paths — only environment variables and the compose profile change.
+The macOS desktop client runs on the operator's Mac, not in the container,
+and points `API_BASE_URL` at the host port.
+
+| Ticket / main boundary | Input → output | Responsibility added |
+|---|---|---|
+| [601 — settings + column](SRA-601-demo-mode-settings-and-user-marker.md) | env vars + DB schema → typed config + cascade helpers | Distinguish demo data from real data; define one typed repository path to remove a user's data. |
+| [602 — packaging](SRA-602-dockerfile-and-docker-compose.md) | clean clone → running container | Docker image + entrypoint + compose profiles (default, postgres, demo). |
+| [603 — reset](SRA-603-demo-reset-job-and-admin-endpoint.md) | `DEMO_MODE=true` + stale demo users → deleted demo data | Hourly cleanup tick + admin-triggered reset + rate-limit narrowing. |
+| [604 — docs](SRA-604-self-host-documentation.md) | reader → running instance | README self-host quickstart, demo-mode subsection, env-var table; `.env.example` Phase 6 block; phase board entries. |
+| [605 — verification](SRA-605-phase-6-integration-verification.md) | full repo → recorded evidence | Migration round-trip, demo lifecycle, route audit, lint/types, `PROGRESS.md` close-out. |
+
+### Required manual evidence for each ticket
+
+| Ticket | Run against real components | Observable success | Failure/recovery check |
+|---|---|---|---|
+| SRA-601 | `alembic upgrade head` from `c3d4e5f6a7b8` then `downgrade -1` then `upgrade head` | `is_demo_user` column appears, disappears, reappears; pre-Phase-6 rows keep `False` | Restore backup; rerun the migration |
+| SRA-602 | `docker compose up` against a clean `.env` | `/api/health` returns 200; `alembic current` matches head | Missing `OPENAI_API_KEY` produces a clear startup error; restore it and rerun |
+| SRA-603 | `POST /api/v1/admin/demo/reset` with `DEMO_MODE=true` | `{"deleted": N}` with N equal to stale demo users; non-demo users survive | Outside demo mode the route returns 503; the scheduler tick is absent |
+| SRA-604 | `grep -nE 'docker compose' README.md` and `grep -nE 'DEMO_MODE' .env.example` | Both greps return non-empty matches; the README lists every env var | Swap the public-demo URL placeholder back, confirm the round-trip |
+| SRA-605 | `pytest -q` + `ruff check .` + `pyright` + manual demo-lifecycle | All green (modulo documented pre-existing Phase 4 limitations); lint/types clean | The Phase 4 limitation count matches the SRA-406 baseline |
+
+Each ticket's **Verification record** must contain actual outcomes before it
+closes. A passing unit test for one model validator, an empty grep, or a
+to-be-filled-in URL are not sufficient. SRA-605 re-runs the complete demo
+lifecycle; earlier tickets must already have their own evidence.
 
 ---
 

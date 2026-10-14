@@ -24,6 +24,7 @@ pytestmark = pytest.mark.phase4
 
 
 def _seed_entry(session: Session, user: User) -> StudyEntry:
+    assert user.id is not None
     entry = StudyEntry(
         user_id=user.id,
         topic="Photosynthesis",
@@ -88,12 +89,12 @@ def test_quiz_answer_answered_at_defaults_to_timezone_aware_utcnow():
 
 def test_quiz_set_create_rejects_server_owned_fields():
     with pytest.raises(ValidationError):
-        QuizSetCreate(entry_id=1, user_id=1, generated_on=datetime.now(UTC).date())
+        QuizSetCreate(entry_id=1, user_id=1, generated_on=datetime.now(UTC).date())  # pyright: ignore[reportCallIssue]
 
 
 def test_quiz_question_create_rejects_server_owned_fields():
     with pytest.raises(ValidationError):
-        QuizQuestionCreate(quiz_set_id=1, question_text="x", correct_option_index=0, order_index=0, id=99)
+        QuizQuestionCreate(quiz_set_id=1, question_text="x", correct_option_index=0, order_index=0, id=99)  # pyright: ignore[reportCallIssue]
 
 
 def test_quiz_attempt_create_rejects_server_owned_fields():
@@ -102,7 +103,7 @@ def test_quiz_attempt_create_rejects_server_owned_fields():
             quiz_set_id=1,
             user_id=1,
             total_questions=3,
-            started_at=datetime.now(UTC),
+            started_at=datetime.now(UTC),  # pyright: ignore[reportCallIssue]
         )
 
 
@@ -112,12 +113,13 @@ def test_quiz_answer_create_rejects_server_owned_fields():
             attempt_id=1,
             question_id=1,
             is_correct=True,
-            answered_at=datetime.now(UTC),
+            answered_at=datetime.now(UTC),  # pyright: ignore[reportCallIssue]
         )
 
 
 def test_quiz_question_options_json_round_trips_through_sqlite(session, seeded_user):
     entry = _seed_entry(session, seeded_user)
+    assert entry.id is not None
     today = datetime.now(UTC).date()
     quiz_set = QuizSet.model_validate(
         QuizSetCreate(entry_id=entry.id),
@@ -148,6 +150,7 @@ def test_quiz_question_options_json_round_trips_through_sqlite(session, seeded_u
 
 def test_quiz_set_unique_constraint_on_entry_and_generated_on(session, seeded_user):
     entry = _seed_entry(session, seeded_user)
+    assert entry.id is not None
     today = datetime.now(UTC).date()
 
     first = QuizSet.model_validate(
@@ -170,6 +173,7 @@ def test_quiz_set_unique_constraint_on_entry_and_generated_on(session, seeded_us
 
 def test_quiz_answer_unique_constraint_on_attempt_and_question(session, seeded_user):
     entry = _seed_entry(session, seeded_user)
+    assert entry.id is not None
     today = datetime.now(UTC).date()
     quiz_set = QuizSet.model_validate(
         QuizSetCreate(entry_id=entry.id),
@@ -218,27 +222,27 @@ def test_quiz_answer_unique_constraint_on_attempt_and_question(session, seeded_u
 
 def test_quiz_set_user_id_foreign_key_targets_users_table():
     user_id_field = QuizSet.model_fields["user_id"]
-    assert user_id_field.foreign_key == "users.id"
+    assert user_id_field.foreign_key == "users.id"  # pyright: ignore[reportAttributeAccessIssue]
 
 
 def test_quiz_set_entry_id_foreign_key_targets_study_entries_table():
     entry_id_field = QuizSet.model_fields["entry_id"]
-    assert entry_id_field.foreign_key == "study_entries.id"
+    assert entry_id_field.foreign_key == "study_entries.id"  # pyright: ignore[reportAttributeAccessIssue]
 
 
 def test_quiz_question_quiz_set_id_foreign_key_targets_quiz_sets_table():
     quiz_set_id_field = QuizQuestion.model_fields["quiz_set_id"]
-    assert quiz_set_id_field.foreign_key == "quiz_sets.id"
+    assert quiz_set_id_field.foreign_key == "quiz_sets.id"  # pyright: ignore[reportAttributeAccessIssue]
 
 
 def test_quiz_attempt_quiz_set_id_foreign_key_targets_quiz_sets_table():
     quiz_set_id_field = QuizAttempt.model_fields["quiz_set_id"]
-    assert quiz_set_id_field.foreign_key == "quiz_sets.id"
+    assert quiz_set_id_field.foreign_key == "quiz_sets.id"  # pyright: ignore[reportAttributeAccessIssue]
 
 
 def test_quiz_answer_attempt_and_question_foreign_keys():
-    assert QuizAnswer.model_fields["attempt_id"].foreign_key == "quiz_attempts.id"
-    assert QuizAnswer.model_fields["question_id"].foreign_key == "quiz_questions.id"
+    assert QuizAnswer.model_fields["attempt_id"].foreign_key == "quiz_attempts.id"  # pyright: ignore[reportAttributeAccessIssue]
+    assert QuizAnswer.model_fields["question_id"].foreign_key == "quiz_questions.id"  # pyright: ignore[reportAttributeAccessIssue]
 
 
 def test_phase4_tables_appear_in_metadata():

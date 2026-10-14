@@ -25,9 +25,10 @@ this shape for every new table.
 
 from datetime import UTC, date, datetime
 from enum import StrEnum
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import field_validator
-from sqlalchemy import CheckConstraint, Enum, UniqueConstraint
+from sqlalchemy import CheckConstraint, Enum, Integer, String, UniqueConstraint
 from sqlmodel import JSON, Column, Field, SQLModel
 
 
@@ -41,6 +42,12 @@ def _utcnow_date() -> date:
     return datetime.now(UTC).date()
 
 
+MAX_QUESTION_COUNT = 20
+MAX_OPTION_COUNT = 6
+
+_REVIEW_TIME_PATTERN = r"^([01][0-9]|2[0-3]):[0-5][0-9]$"
+
+
 class UserRole(StrEnum):
     """Roles with observable Phase 3 authorization behavior."""
 
@@ -51,10 +58,73 @@ class UserRole(StrEnum):
 class UserBase(SQLModel):
     email: str = Field(unique=True)
     display_name: str
+    preferred_review_time: str = Field(
+        default="09:00",
+        sa_column=Column(String, nullable=False, server_default="09:00"),
+    )
+    timezone: str = Field(
+        default="UTC",
+        sa_column=Column(String, nullable=False, server_default="UTC"),
+    )
+    quiz_question_count: int = Field(
+        default=10,
+        sa_column=Column(Integer, nullable=False, server_default="10"),
+    )
+    quiz_option_count: int = Field(
+        default=4,
+        sa_column=Column(Integer, nullable=False, server_default="4"),
+    )
+
+    @field_validator("preferred_review_time")
+    @classmethod
+    def validate_preferred_review_time(cls, value: str) -> str:
+        import re
+
+        if re.fullmatch(_REVIEW_TIME_PATTERN, value) is None:
+            raise ValueError(
+                "preferred_review_time must be HH:MM with hour 00-23 and minute 00-59"
+            )
+        return value
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, value: str) -> str:
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError(f"unknown IANA timezone: {value!r}") from exc
+        return value
+
+    @field_validator("quiz_question_count")
+    @classmethod
+    def validate_quiz_question_count(cls, value: int) -> int:
+        if value < 1 or value > MAX_QUESTION_COUNT:
+            raise ValueError(
+                f"quiz_question_count must be between 1 and {MAX_QUESTION_COUNT}"
+            )
+        return value
+
+    @field_validator("quiz_option_count")
+    @classmethod
+    def validate_quiz_option_count(cls, value: int) -> int:
+        if value < 2 or value > MAX_OPTION_COUNT:
+            raise ValueError(
+                f"quiz_option_count must be between 2 and {MAX_OPTION_COUNT}"
+            )
+        return value
 
 
 class UserCreate(UserBase):
-    """What a caller may supply to create a User -- no id or created_at."""
+    """What a caller may supply to create a User -- no id or created_at.
+
+    Phase 3 callers (the OAuth callback) supply ``google_sub`` here too;
+    keeping it on the ``Create`` schema mirrors the Phase 4
+    ``QuizSet``/``QuizAttempt`` pattern where a denormalized ownership
+    field is accepted from the caller because it is part of the verified
+    input, not a server-assigned foreign key.
+    """
+
+    google_sub: str | None = None
 
     model_config = {"extra": "forbid"}
 
@@ -66,6 +136,14 @@ class User(UserBase, table=True):
         CheckConstraint(
             "google_sub IS NULL OR length(trim(google_sub)) > 0",
             name="ck_users_google_sub_nonempty",
+        ),
+        CheckConstraint(
+            "preferred_review_time REGEXP '^[0-2][0-9]:[0-5][0-9]$'",
+            name="ck_users_preferred_review_time_shape",
+        ),
+        CheckConstraint(
+            "quiz_question_count BETWEEN 1 AND 20 AND quiz_option_count BETWEEN 2 AND 6",
+            name="ck_users_quiz_counts_positive",
         ),
     )
 
@@ -86,6 +164,7 @@ class User(UserBase, table=True):
         ),
     )
     last_login_at: datetime | None = None
+    wakeup_notification_sent_at: datetime | None = None
     created_at: datetime = Field(default_factory=_utcnow)
 
     @field_validator("google_sub")

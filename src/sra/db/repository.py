@@ -6,6 +6,7 @@ nothing to establish now while there's only one local user.
 """
 
 from datetime import UTC, date, datetime, time
+from typing import TypedDict
 
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, String, cast, or_, select
@@ -22,9 +23,90 @@ from sra.db.models import (
     ReviewSchedule,
     StudyEntry,
     StudyEntryCreate,
+    User,
     _utcnow,
 )
 from sra.db.scheduler import schedule_reviews_for_entry
+
+
+class UserNotFoundError(Exception):
+    """Raised when a repository helper targets a missing `users` row."""
+
+
+class UserPreferences(TypedDict):
+    """Canonical Phase 5 per-user preferences shape.
+
+    Every later Phase 5 caller (`users_due_for_wakeup`, the voice quiz
+    conversation graph, the pregeneration job) imports this typed dict
+    instead of reaching into `User` columns individually.
+    """
+
+    preferred_review_time: str
+    timezone: str
+    quiz_question_count: int
+    quiz_option_count: int
+    wakeup_notification_sent_at: datetime | None
+
+
+def get_user_preferences(user_id: int, session: Session) -> UserPreferences:
+    """Return the typed preferences row for `user_id`.
+
+    Raises ``UserNotFoundError`` when the row is missing so callers can
+    distinguish a missing user from a present-but-empty preferences set
+    (which never happens today but could if a future ticket narrows the
+    default values).
+    """
+
+    user = session.get(User, user_id)
+    if user is None:
+        raise UserNotFoundError(f"user_id {user_id} does not exist")
+    return {
+        "preferred_review_time": user.preferred_review_time,
+        "timezone": user.timezone,
+        "quiz_question_count": user.quiz_question_count,
+        "quiz_option_count": user.quiz_option_count,
+        "wakeup_notification_sent_at": user.wakeup_notification_sent_at,
+    }
+
+
+def update_user_preferences(
+    user_id: int,
+    prefs: dict,
+    session: Session,
+) -> UserPreferences:
+    """Persist the caller-supplied preference fields and return the row.
+
+    Only keys present in ``prefs`` are written; absent keys keep their
+    current value. ``wakeup_notification_sent_at`` is intentionally NOT in
+    the writable set -- it is server-owned state, written exclusively by
+    the wake-up scheduler (SRA-502). A PUT that did clear it would race
+    with the scheduler and suppress the next day's notification.
+    """
+
+    user = session.get(User, user_id)
+    if user is None:
+        raise UserNotFoundError(f"user_id {user_id} does not exist")
+
+    if "preferred_review_time" in prefs:
+        user.preferred_review_time = prefs["preferred_review_time"]
+    if "timezone" in prefs:
+        user.timezone = prefs["timezone"]
+    if "quiz_question_count" in prefs:
+        user.quiz_question_count = prefs["quiz_question_count"]
+    if "quiz_option_count" in prefs:
+        user.quiz_option_count = prefs["quiz_option_count"]
+
+    session.add(user)
+    session.commit()
+    session.refresh(user)
+
+    return {
+        "preferred_review_time": user.preferred_review_time,
+        "timezone": user.timezone,
+        "quiz_question_count": user.quiz_question_count,
+        "quiz_option_count": user.quiz_option_count,
+        "wakeup_notification_sent_at": user.wakeup_notification_sent_at,
+    }
 
 
 def create_entry(*, entry_create: StudyEntryCreate, user_id: int, session: Session) -> StudyEntry:
@@ -182,6 +264,7 @@ def create_quiz_set(
     ValueError rather than a raw SQLAlchemy IntegrityError.
     """
 
+    assert entry.id is not None
     quiz_set = QuizSet.model_validate(
         QuizSetCreate(entry_id=entry.id),
         update={

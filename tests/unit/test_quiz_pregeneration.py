@@ -4,16 +4,16 @@ from datetime import date, timedelta
 
 import pytest
 from sqlmodel import select
-from sra.agents.quiz_graph import generate_and_persist_questions
-from sra.jobs.quiz_pregeneration import (
-    pregenerate_quizzes_for_day,
-    pregenerate_quizzes_for_user,
-)
 
+from sra.agents.quiz_graph import generate_and_persist_questions
 from sra.agents.schemas import MCQDraft, MCQDrafts
 from sra.db.models import QuizSet, ReviewSchedule, StudyEntry, StudyEntryCreate
 from sra.db.repository import get_due_reviews
 from sra.db.scheduler import compute_review_dates
+from sra.jobs.quiz_pregeneration import (
+    pregenerate_quizzes_for_day,
+    pregenerate_quizzes_for_user,
+)
 
 pytestmark = pytest.mark.phase4
 
@@ -41,6 +41,7 @@ def _seed_entry_with_six_reviews(session, user_id: int) -> StudyEntry:
     session.add(entry)
     session.commit()
     session.refresh(entry)
+    assert entry.id is not None
     schedule_dates = compute_review_dates(entry.created_at.date())
     for label, scheduled in schedule_dates:
         session.add(
@@ -93,6 +94,7 @@ def test_pregenerate_creates_one_quiz_set_per_due_entry_for_user(monkeypatch, se
     today = date.today()
     entry_a = _seed_entry_with_six_reviews(session, seeded_user.id)
     entry_b = _seed_entry_with_six_reviews(session, seeded_user.id)
+    assert entry_a.id is not None and entry_b.id is not None
     _due_review_today(session, entry_a.id, today)
     _due_review_today(session, entry_b.id, today)
     _patch_generate(monkeypatch, drafts=_drafts(n=2))
@@ -111,6 +113,7 @@ def test_pregenerate_creates_one_quiz_set_per_due_entry_for_user(monkeypatch, se
 def test_pregenerate_skips_entries_already_seeded_today(monkeypatch, session, seeded_user):
     today = date.today()
     entry = _seed_entry_with_six_reviews(session, seeded_user.id)
+    assert entry.id is not None
     _due_review_today(session, entry.id, today)
     _patch_generate(monkeypatch, drafts=_drafts())
 
@@ -126,6 +129,7 @@ def test_pregenerate_skips_entries_already_seeded_today(monkeypatch, session, se
 def test_pregenerate_ignores_entries_not_due_today(monkeypatch, session, seeded_user):
     today = date.today()
     entry = _seed_entry_with_six_reviews(session, seeded_user.id)
+    assert entry.id is not None
     _due_review_in_future(session, entry.id, today, days=3)
     _patch_generate(monkeypatch, drafts=_drafts())
 
@@ -140,6 +144,7 @@ def test_pregenerate_contains_one_entry_error_and_continues(monkeypatch, session
     today = date.today()
     entry_a = _seed_entry_with_six_reviews(session, seeded_user.id)
     entry_b = _seed_entry_with_six_reviews(session, seeded_user.id)
+    assert entry_a.id is not None and entry_b.id is not None
     _due_review_today(session, entry_a.id, today)
     _due_review_today(session, entry_b.id, today)
 
@@ -171,6 +176,7 @@ def test_pregenerate_quizzes_for_day_walks_every_user_and_aggregates(monkeypatch
     today = date.today()
     entry_a1 = _seed_entry_with_six_reviews(session, seeded_user.id)
     entry_a2 = _seed_entry_with_six_reviews(session, seeded_user.id)
+    assert entry_a1.id is not None and entry_a2.id is not None
     _due_review_today(session, entry_a1.id, today)
     _due_review_today(session, entry_a2.id, today)
     _patch_generate(monkeypatch, drafts=_drafts())
@@ -184,6 +190,7 @@ def test_pregenerate_quizzes_for_day_walks_every_user_and_aggregates(monkeypatch
 def test_pregenerate_quizzes_for_day_is_idempotent_across_runs(monkeypatch, session, seeded_user, other_user):
     today = date.today()
     entry = _seed_entry_with_six_reviews(session, seeded_user.id)
+    assert entry.id is not None
     _due_review_today(session, entry.id, today)
     _patch_generate(monkeypatch, drafts=_drafts())
 
@@ -210,6 +217,7 @@ def test_pregenerate_quizzes_for_day_skips_runs_when_no_users_have_due_entries(m
 def test_pregenerate_quizzes_for_user_uses_due_reviews_helper(session, seeded_user, monkeypatch):
     today = date.today()
     entry = _seed_entry_with_six_reviews(session, seeded_user.id)
+    assert entry.id is not None
     _due_review_today(session, entry.id, today)
     _patch_generate(monkeypatch, drafts=_drafts())
 
@@ -242,6 +250,7 @@ def test_pregenerate_quizzes_for_day_returns_typed_summary_keys(monkeypatch, ses
 def test_pregenerate_uses_default_question_and_option_counts(monkeypatch, session, seeded_user):
     today = date.today()
     entry = _seed_entry_with_six_reviews(session, seeded_user.id)
+    assert entry.id is not None
     _due_review_today(session, entry.id, today)
 
     captured: list[tuple[int, int]] = []
@@ -271,6 +280,7 @@ def test_pregenerate_uses_default_question_and_option_counts(monkeypatch, sessio
 def test_pregenerate_distinguishes_entries_with_multiple_due_reviews(monkeypatch, session, seeded_user):
     today = date.today()
     entry = _seed_entry_with_six_reviews(session, seeded_user.id)
+    assert entry.id is not None
     _due_review_today(session, entry.id, today)
     _due_review_today(session, entry.id, today)
     _patch_generate(monkeypatch, drafts=_drafts())
@@ -285,6 +295,7 @@ def test_pregenerate_isolates_users_with_owns(monkeypatch, session, seeded_user,
     today = date.today()
     entry_a = _seed_entry_with_six_reviews(session, seeded_user.id)
     entry_b = _seed_entry_with_six_reviews(session, other_user.id)
+    assert entry_a.id is not None and entry_b.id is not None
     _due_review_today(session, entry_a.id, today)
     _due_review_today(session, entry_b.id, today)
     _patch_generate(monkeypatch, drafts=_drafts())
