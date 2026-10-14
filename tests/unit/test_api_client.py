@@ -1,5 +1,7 @@
 """HTTP wrapper contracts, using a fake transport without any live server."""
 
+# pyright: reportAttributeAccessIssue=false, reportArgumentType=false, reportOptionalMemberAccess=false, reportCallIssue=false
+
 import json
 import math
 from types import SimpleNamespace
@@ -290,3 +292,155 @@ def test_authenticated_failures_never_echo_credentials(monkeypatch, failure):
         api_client.ingest_transcript("A note", credential=secret)
     assert secret not in "".join(traceback.format_exception(caught.value))
     assert secret not in repr(caught.value.detail)
+
+
+# ---------------------------------------------------------------------------
+# SRA-506 client API extensions: digest + voice quiz
+# ---------------------------------------------------------------------------
+
+
+DIGEST_ROW = {
+    "id": 1,
+    "entry": {**ENTRY},
+    "interval_label": "1d",
+    "scheduled_date": "2026-10-14",
+    "status": "pending",
+}
+
+
+@pytest.mark.phase5
+def test_get_digest_ready_returns_true_and_calls_ready_route(http_boundary):
+    clients, requests = http_boundary(lambda request: httpx.Response(200, json={"ready": True}))
+    result = api_client.get_digest_ready(credential="token-1")
+    assert result is True
+    assert len(requests) == 1
+    assert str(requests[0].url) == "http://testserver/api/v1/digest/ready"
+    assert requests[0].method == "GET"
+    assert requests[0].headers["authorization"] == "Bearer token-1"
+    assert len(clients) == 1 and clients[0].is_closed
+
+
+@pytest.mark.phase5
+def test_get_digest_ready_returns_false_when_not_due(http_boundary):
+    clients, requests = http_boundary(lambda request: httpx.Response(200, json={"ready": False}))
+    result = api_client.get_digest_ready(credential="token-1")
+    assert result is False
+    assert len(requests) == 1
+
+
+@pytest.mark.phase5
+def test_get_digest_ready_auth_required_on_401(http_boundary):
+    clients, requests = http_boundary(lambda request: httpx.Response(401, json={"detail": "Sign in"}))
+    with pytest.raises(api_client.ApiClientError, match="(?i)auth_required|sign in"):
+        api_client.get_digest_ready(credential="token-1")
+    assert len(requests) == 1
+
+
+@pytest.mark.phase5
+def test_get_digest_ready_rate_limited_includes_retry_after(http_boundary):
+    clients, requests = http_boundary(
+        lambda request: httpx.Response(429, json={"detail": "Rate limit exceeded"}, headers={"retry-after": "7"})
+    )
+    with pytest.raises(api_client.ApiClientError) as caught:
+        api_client.get_digest_ready(credential="token-1")
+    assert caught.value.status_code == 429
+    assert getattr(caught.value, "retry_after", None) == 7 or "7" in str(caught.value)
+
+
+@pytest.mark.phase5
+def test_get_digest_text_formats_a_readable_sentence_from_review_rows(http_boundary):
+    clients, requests = http_boundary(
+        lambda request: httpx.Response(200, json=[DIGEST_ROW, {**DIGEST_ROW, "id": 2, "entry": {**ENTRY, "id": 18, "topic": "Meiosis"}}])
+    )
+    sentence = api_client.get_digest_text(credential="token-1")
+    assert "2 reviews" in sentence
+    assert "Mitosis" in sentence
+    assert "Meiosis" in sentence
+    assert len(requests) == 1
+    assert str(requests[0].url) == "http://testserver/api/v1/digest"
+
+
+@pytest.mark.phase5
+def test_get_digest_text_with_empty_list_returns_specific_sentence(http_boundary):
+    clients, requests = http_boundary(lambda request: httpx.Response(200, json=[]))
+    sentence = api_client.get_digest_text(credential="token-1")
+    assert "no reviews" in sentence.lower()
+
+
+@pytest.mark.phase5
+def test_start_voice_quiz_attempt_issues_one_post_and_returns_dict(http_boundary):
+    payload = {"attempt_id": 42, "question_text": "q0", "options": ["a", "b"]}
+    clients, requests = http_boundary(lambda request: httpx.Response(201, json=payload))
+    result = api_client.start_voice_quiz_attempt(quiz_set_id=7, credential="token-1")
+    assert result == payload
+    assert len(requests) == 1
+    request = requests[0]
+    assert request.method == "POST"
+    assert str(request.url) == "http://testserver/api/v1/quiz/7/attempts"
+    assert json.loads(request.content) == {"mode": "voice"}
+    assert request.headers["authorization"] == "Bearer token-1"
+
+
+@pytest.mark.phase5
+def test_start_voice_quiz_attempt_maps_phase4_voice_rejection_to_typed_error(http_boundary):
+    clients, requests = http_boundary(
+        lambda request: httpx.Response(
+            400, json={"detail": "Voice mode is not yet supported. See Phase 5."}
+        )
+    )
+    with pytest.raises(api_client.ApiClientError, match="(?i)phase5|phase 5|not yet supported"):
+        api_client.start_voice_quiz_attempt(quiz_set_id=7, credential="token-1")
+    assert len(requests) == 1
+
+
+@pytest.mark.phase5
+def test_send_voice_turn_forwards_answer_text_and_returns_dict(http_boundary):
+    payload = {
+        "is_correct": True,
+        "feedback_text": "Correct.",
+        "next_question_text": "q1",
+        "finished": False,
+        "score": 1,
+    }
+    clients, requests = http_boundary(lambda request: httpx.Response(200, json=payload))
+    result = api_client.send_voice_turn(
+        attempt_id=42, answer_text="the second one", credential="token-1"
+    )
+    assert result == payload
+    assert len(requests) == 1
+    request = requests[0]
+    assert request.method == "POST"
+    assert str(request.url) == "http://testserver/api/v1/quiz/attempts/42/voice-turn"
+    assert json.loads(request.content) == {"answer_text": "the second one"}
+    assert request.headers["authorization"] == "Bearer token-1"
+
+
+@pytest.mark.phase5
+def test_send_voice_turn_maps_409_completed_to_typed_error(http_boundary):
+    clients, requests = http_boundary(
+        lambda request: httpx.Response(409, json={"detail": "Attempt already completed"})
+    )
+    with pytest.raises(api_client.ApiClientError, match="(?i)attempt_completed|already completed"):
+        api_client.send_voice_turn(attempt_id=42, answer_text="ignored", credential="token-1")
+    assert len(requests) == 1
+
+
+@pytest.mark.phase5
+def test_client_methods_close_clients_under_repeated_calls(http_boundary):
+    for _ in range(3):
+        clients, requests = http_boundary(lambda request: httpx.Response(200, json={"ready": True}))
+        api_client.get_digest_ready(credential="token-1")
+        assert clients[0].is_closed
+
+
+@pytest.mark.phase5
+def test_client_methods_pass_credentials_only_in_bearer_header_not_in_url(http_boundary):
+    clients, requests = http_boundary(
+        lambda request: httpx.Response(201, json={"attempt_id": 1, "question_text": "q", "options": []})
+    )
+    secret = "server-issued-application-credential"
+    api_client.start_voice_quiz_attempt(quiz_set_id=1, credential=secret)
+    assert requests[0].headers["authorization"] == f"Bearer {secret}"
+    assert secret not in str(requests[0].url)
+    assert secret not in requests[0].content.decode()
+

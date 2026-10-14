@@ -38,6 +38,8 @@ _ENTRY_LIST = TypeAdapter(list[_EntryResponse])
 class ApiClientError(Exception):
     """A user-facing submission failure, with HTTP details when available."""
 
+    retry_after: int | None = None
+
     def __init__(
         self,
         message: str,
@@ -147,3 +149,236 @@ def ingest_transcript(transcript: str, *, credential: str | None = None) -> list
             raise ApiClientError("Invalid entries in the ingestion response.", status_code=201) from None
         raise ApiClientError(f"Invalid entries in the ingestion response: {exc}", status_code=201) from exc
     return entries
+
+
+def _extract_detail(response: httpx.Response) -> object | None:
+    """Pull FastAPI's structured `detail` out of a JSON error body, if present."""
+    try:
+        body = response.json()
+    except ValueError:
+        return None
+    if isinstance(body, dict):
+        return body.get("detail")
+    return None
+
+
+def _auth_required_error(response: httpx.Response, url: str) -> ApiClientError:
+    detail = _extract_detail(response)
+    suffix = f" Server said: {detail}." if detail is not None else ""
+    return ApiClientError(
+        f"auth_required for {url}.{suffix}",
+        status_code=response.status_code,
+        detail=detail,
+    )
+
+
+def _rate_limited_error(response: httpx.Response, url: str) -> ApiClientError:
+    detail = _extract_detail(response)
+    retry_after_header = response.headers.get("retry-after")
+    retry_after: int | None = None
+    if retry_after_header is not None:
+        try:
+            retry_after = int(retry_after_header)
+        except ValueError:
+            retry_after = None
+    suffix = f" Retry after {retry_after_header} seconds." if retry_after_header is not None else ""
+    error = ApiClientError(
+        f"rate_limited for {url}.{suffix}",
+        status_code=response.status_code,
+        detail=detail,
+    )
+    error.retry_after = retry_after
+    return error
+
+
+def _http_error(response: httpx.Response, url: str, label: str) -> ApiClientError:
+    detail = _extract_detail(response)
+    message = detail if detail is not None else (response.text.strip() or response.reason_phrase)
+    return ApiClientError(
+        f"{label} returned HTTP {response.status_code}: {message}",
+        status_code=response.status_code,
+        detail=detail,
+    )
+
+
+def _authed_get(path: str, credential: str | None) -> tuple[httpx.Response, str]:
+    """Issue a single GET with the resolved bearer header; close the client on every path."""
+    base_url = get_client_settings().api_base_url.rstrip("/")
+    url = f"{base_url}{path}"
+    headers = {"Authorization": f"Bearer {credential}"} if credential is not None else None
+    with _create_http_client() as client:
+        return client.get(url, headers=headers), url
+
+
+def _authed_post(path: str, body: dict[str, Any], credential: str | None) -> tuple[httpx.Response, str]:
+    """Issue a single POST with the resolved bearer header; close the client on every path."""
+    base_url = get_client_settings().api_base_url.rstrip("/")
+    url = f"{base_url}{path}"
+    headers = {"Authorization": f"Bearer {credential}"} if credential is not None else None
+    with _create_http_client() as client:
+        return client.post(url, json=body, headers=headers), url
+
+
+def get_digest_ready(*, credential: str | None = None) -> bool:
+    """SRA-506: GET /api/v1/digest/ready -> bool.
+
+    Returns the per-user "ready" flag wakeup.py polls before calling
+    get_digest_text(). 401 -> ApiClientError("auth_required"); 429 ->
+    ApiClientError("rate_limited") with `retry_after` attached when the
+    server returned Retry-After; any other non-200 -> ApiClientError with
+    the original status and FastAPI detail.
+    """
+    response, url = _authed_get("/api/v1/digest/ready", credential)
+
+    if response.status_code == 401:
+        raise _auth_required_error(response, url)
+    if response.status_code == 429:
+        raise _rate_limited_error(response, url)
+    if response.status_code != 200:
+        raise _http_error(response, url, "digest/ready")
+
+    try:
+        body = response.json()
+    except ValueError as exc:
+        raise ApiClientError("Invalid JSON in the digest/ready response.", status_code=200) from exc
+
+    if not isinstance(body, dict) or not isinstance(body.get("ready"), bool):
+        raise ApiClientError("Unexpected digest/ready response shape.", status_code=200)
+
+    return body["ready"]
+
+
+def get_digest_text(*, credential: str | None = None) -> str:
+    """SRA-506: GET /api/v1/digest -> one spoken sentence.
+
+    Formats the returned ReviewOut[] into
+    `"You have N reviews due today: <topic 1>, <topic 2>, and <topic M>."`.
+    An empty digest returns `"You have no reviews due today."`.
+    Raises ApiClientError on 401 (auth_required), 429 (rate_limited), or
+    any other non-200 HTTP failure, preserving status_code.
+    """
+    response, url = _authed_get("/api/v1/digest", credential)
+
+    if response.status_code == 401:
+        raise _auth_required_error(response, url)
+    if response.status_code == 429:
+        raise _rate_limited_error(response, url)
+    if response.status_code != 200:
+        raise _http_error(response, url, "digest")
+
+    try:
+        rows = response.json()
+    except ValueError as exc:
+        raise ApiClientError("Invalid JSON in the digest response.", status_code=200) from exc
+
+    if not isinstance(rows, list):
+        raise ApiClientError("Digest response was not a list.", status_code=200)
+
+    if not rows:
+        return "You have no reviews due today."
+
+    topics: list[str] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        entry = row.get("entry")
+        if isinstance(entry, dict):
+            topic = entry.get("topic")
+            if isinstance(topic, str):
+                topics.append(topic)
+
+    count = len(rows)
+    if not topics:
+        return f"You have {count} reviews due today."
+    if count == 1:
+        body = topics[0]
+    else:
+        body = ", ".join(topics[:-1]) + f", and {topics[-1]}"
+    return f"You have {count} reviews due today: {body}."
+
+
+def start_voice_quiz_attempt(quiz_set_id: int, *, credential: str | None = None) -> dict[str, Any]:
+    """SRA-506: POST /api/v1/quiz/{quiz_set_id}/attempts {"mode": "voice"}.
+
+    Returns the server's `{attempt_id, question_text, options}` payload.
+    The Phase 4 `400 "Voice mode is not yet supported"` leftover is mapped
+    to ApiClientError("server_phase5_pending") so the desktop fails fast
+    against a pre-Phase-5 server. 401 -> auth_required; 429 -> rate_limited.
+    """
+    response, url = _authed_post(f"/api/v1/quiz/{quiz_set_id}/attempts", {"mode": "voice"}, credential)
+
+    if response.status_code in (200, 201):
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise ApiClientError(
+                "Invalid JSON in the voice attempt response.",
+                status_code=response.status_code,
+            ) from exc
+        if not isinstance(payload, dict):
+            raise ApiClientError(
+                "Voice attempt response was not an object.",
+                status_code=response.status_code,
+            )
+        return payload
+
+    if response.status_code == 400:
+        detail = _extract_detail(response)
+        if isinstance(detail, str) and "not yet supported" in detail.lower():
+            raise ApiClientError(
+                f"server_phase5_pending: {detail}",
+                status_code=400,
+                detail=detail,
+            )
+        raise ApiClientError(
+            f"Voice attempt rejected: {detail if detail is not None else response.text}",
+            status_code=400,
+            detail=detail,
+        )
+    if response.status_code == 401:
+        raise _auth_required_error(response, url)
+    if response.status_code == 429:
+        raise _rate_limited_error(response, url)
+    raise _http_error(response, url, "voice attempt")
+
+
+def send_voice_turn(
+    attempt_id: int,
+    answer_text: str,
+    *,
+    credential: str | None = None,
+) -> dict[str, Any]:
+    """SRA-506: POST /api/v1/quiz/attempts/{attempt_id}/voice-turn.
+
+    Body `{"answer_text": answer_text}`. Returns the server's
+    `VoiceTurnResponse` dict. 409 ("Attempt already completed") maps to
+    ApiClientError("attempt_completed"). 401 -> auth_required;
+    429 -> rate_limited.
+    """
+    response, url = _authed_post(
+        f"/api/v1/quiz/attempts/{attempt_id}/voice-turn",
+        {"answer_text": answer_text},
+        credential,
+    )
+
+    if response.status_code == 200:
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise ApiClientError("Invalid JSON in the voice turn response.", status_code=200) from exc
+        if not isinstance(payload, dict):
+            raise ApiClientError("Voice turn response was not an object.", status_code=200)
+        return payload
+
+    if response.status_code == 409:
+        detail = _extract_detail(response)
+        raise ApiClientError(
+            f"attempt_completed: {detail if detail is not None else 'Attempt already completed.'}",
+            status_code=409,
+            detail=detail,
+        )
+    if response.status_code == 401:
+        raise _auth_required_error(response, url)
+    if response.status_code == 429:
+        raise _rate_limited_error(response, url)
+    raise _http_error(response, url, "voice turn")
