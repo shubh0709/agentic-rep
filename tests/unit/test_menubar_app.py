@@ -11,6 +11,7 @@ import sys
 from collections import deque
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 from unittest.mock import Mock
 
 import pytest
@@ -102,7 +103,7 @@ import importlib.abc
 import sys
 class BlockOptional(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
-        if fullname.split('.')[0] in {'sounddevice', 'rumps', 'pynput', 'whisper', 'faster_whisper'}:
+        if fullname.split('.')[0] in {'sounddevice', 'rumps', 'whisper', 'faster_whisper'}:
             raise AssertionError('Import attempted optional runtime dependency: ' + fullname)
 sys.meta_path.insert(0, BlockOptional())
 import sra.capture.recording
@@ -118,7 +119,7 @@ import sra.capture.menubar_app
 def test_desktop_import_smoke_with_real_dependencies_available():
     if sys.platform != "darwin":
         pytest.skip("Desktop import smoke requires macOS; controller tests run on every platform")
-    missing = [name for name in ("rumps", "pynput", "sounddevice") if importlib.util.find_spec(name) is None]
+    missing = [name for name in ("rumps", "sounddevice") if importlib.util.find_spec(name) is None]
     if missing:
         pytest.skip(f"Desktop import smoke requires desktop extra; missing: {', '.join(missing)}")
     from sra.capture.menubar_app import SpacedRepetitionAgentApp
@@ -148,12 +149,106 @@ def test_desktop_entry_point_explains_setup_failure_and_returns_nonzero(monkeypa
     assert "desktop extra missing" in output.out + output.err
 
 
+@pytest.mark.parametrize(
+    ("combo", "expected"),
+    [
+        ("<ctrl>+<alt>+r", ((1 << 12) | (1 << 11), 15)),
+        ("<command>+<shift>+F12", ((1 << 8) | (1 << 9), 111)),
+        ("option+space", (1 << 11, 49)),
+    ],
+)
+def test_exact_hotkey_parser_accepts_supported_chords(combo, expected):
+    from sra.capture.menubar_app import _parse_hotkey
+
+    assert _parse_hotkey(combo) == expected
+
+
+@pytest.mark.parametrize("combo", ["r", "<ctrl>", "<ctrl>+<control>+r", "<ctrl>+r+x", "<ctrl>+delete", ""])
+def test_exact_hotkey_parser_rejects_unsafe_or_unsupported_chords(combo):
+    from sra.capture.menubar_app import _parse_hotkey
+
+    with pytest.raises(ValueError):
+        _parse_hotkey(combo)
+
+
+def test_exact_hotkey_registers_one_chord_and_releases_it(monkeypatch):
+    from types import SimpleNamespace
+
+    from sra.capture import menubar_app
+
+    carbon = SimpleNamespace(
+        GetApplicationEventTarget=Mock(return_value=123),
+        InstallEventHandler=Mock(return_value=0),
+        RegisterEventHotKey=Mock(return_value=0),
+        UnregisterEventHotKey=Mock(return_value=0),
+        RemoveEventHandler=Mock(return_value=0),
+    )
+    monkeypatch.setattr(menubar_app.ctypes.util, "find_library", lambda name: f"{name}.framework")
+    monkeypatch.setattr(menubar_app.ctypes, "CDLL", Mock(return_value=carbon))
+    callback = Mock()
+    hotkey = menubar_app._MacOSHotKey("<ctrl>+<alt>+r", callback)
+
+    hotkey.start()
+    assert hotkey.is_alive()
+    registration = carbon.RegisterEventHotKey.call_args.args
+    assert registration[:2] == (15, (1 << 12) | (1 << 11))
+    handler = hotkey._handler
+    assert handler is not None
+    handler(None, None, None)
+    callback.assert_called_once_with()
+
+    hotkey.stop()
+    assert not hotkey.is_alive()
+    carbon.UnregisterEventHotKey.assert_called_once()
+    carbon.RemoveEventHandler.assert_called_once()
+
+
 def test_initial_idle_state_has_no_recorder_or_worker(make_harness):
     harness = make_harness()
     assert harness.controller.state == "idle"
     assert not harness.recorders
     assert not harness.work
     assert "idle" in harness.messages[-1].lower()
+
+
+@pytest.mark.parametrize("failed_stage", ["handler", "registration"])
+def test_native_hotkey_registration_failure_releases_resources_and_can_retry(monkeypatch, failed_stage):
+    from types import SimpleNamespace
+
+    from sra.capture import menubar_app
+
+    carbon = SimpleNamespace(
+        GetApplicationEventTarget=Mock(return_value=123),
+        InstallEventHandler=Mock(return_value=-1 if failed_stage == "handler" else 0),
+        RegisterEventHotKey=Mock(return_value=-9878 if failed_stage == "registration" else 0),
+        UnregisterEventHotKey=Mock(return_value=0),
+        RemoveEventHandler=Mock(return_value=0),
+    )
+    monkeypatch.setattr(menubar_app.ctypes.util, "find_library", lambda name: "Carbon.framework")
+    monkeypatch.setattr(menubar_app.ctypes, "CDLL", Mock(return_value=carbon))
+    callback = Mock()
+    hotkey = menubar_app._MacOSHotKey("<ctrl>+<alt>+r", callback)
+    with pytest.raises(RuntimeError, match="macOS error"):
+        hotkey.start()
+    assert not hotkey.is_alive()
+    callback.assert_not_called()
+    if failed_stage == "handler":
+        carbon.RegisterEventHotKey.assert_not_called()
+        carbon.RemoveEventHandler.assert_not_called()
+    else:
+        carbon.RemoveEventHandler.assert_called_once()
+    hotkey.stop()
+    carbon.UnregisterEventHotKey.assert_not_called()
+    carbon.InstallEventHandler.return_value = 0
+    carbon.RegisterEventHotKey.return_value = 0
+    hotkey.start()
+    assert hotkey.is_alive()
+    count = carbon.RegisterEventHotKey.call_count
+    hotkey.start()
+    assert carbon.RegisterEventHotKey.call_count == count
+    hotkey.stop()
+    hotkey.stop()
+    carbon.UnregisterEventHotKey.assert_called_once()
 
 
 def test_hotkey_toggle_runs_one_background_submission_and_marshals_success_to_ui(make_harness):
@@ -352,3 +447,178 @@ def test_quit_during_inflight_read_retains_audio_until_worker_finishes_and_ignor
     assert len(harness.recorders) == 1
     harness.process.assert_called_once()
     harness.stop_listener.assert_called_once_with()
+
+
+def test_recorder_factory_failure_recovers(make_harness):
+    harness = make_harness()
+    factory = harness.controller._factory
+    harness.controller._factory = Mock(side_effect=RuntimeError("device unavailable"))
+    harness.controller.toggle()
+    assert harness.controller.state == "idle"
+    assert "device unavailable" in harness.messages[-1]
+    harness.controller._factory = factory
+    harness.controller.toggle()
+    assert harness.controller.state == "recording"
+
+
+def test_cleanup_error_preserves_processing_error_and_recovers(make_harness):
+    harness = make_harness()
+    harness.controller.toggle()
+    harness.recorders[0].close.side_effect = RuntimeError("cannot remove WAV")
+    harness.process.side_effect = RuntimeError("server unavailable")
+    harness.controller.toggle()
+    harness.finish_worker()
+    harness.drain_ui()
+    assert harness.controller.state == "idle"
+    assert "server unavailable" in harness.messages[-1]
+    assert "cleanup failed: cannot remove WAV" in harness.messages[-1]
+
+
+@pytest.mark.parametrize("outcome", ["success", "pipeline_error", "event_loop_error", "hotkey_error"])
+def test_desktop_adapter_dispatch_and_shutdown(monkeypatch, tmp_path, outcome):
+    """Exercise adapter wiring without Cocoa, device permissions, or real timing."""
+    from concurrent.futures import Future
+    from types import SimpleNamespace
+
+    from sra import config
+    from sra.capture import menubar_app, pipeline, recording
+
+    ui_thread = True
+    workers = deque()
+    timer = None
+    listener = None
+    app = None
+    recorder = FakeRecorder(tmp_path / "desktop.wav")
+    process = Mock(return_value=[{"id": 72}])
+    if outcome == "pipeline_error":
+        process.side_effect = RuntimeError("server unavailable")
+
+    class Executor:
+        def __init__(self, **kwargs):
+            pass
+
+        def submit(self, work):
+            future = Future()
+
+            def finish():
+                work()
+                future.set_result(None)
+
+            workers.append(finish)
+            return future
+
+        def shutdown(self, *, wait):
+            assert wait
+            while workers:
+                workers.popleft()()
+            assert not recorder.path.exists()
+
+    class MenuItem:
+        def __init__(self, title, callback=None):
+            self.title = title
+            self.callback = callback
+
+    class Timer:
+        def __init__(self, callback, interval):
+            nonlocal timer
+            timer = self
+            self.callback = callback
+            self.started = False
+
+        def start(self):
+            assert ui_thread
+            self.started = True
+
+        def stop(self):
+            self.started = False
+
+    class Listener:
+        def __init__(self, combo, callback):
+            nonlocal listener
+            listener = self
+            assert combo == "<ctrl>+<alt>+r"
+            self.callback = callback
+            self.alive = False
+
+        def start(self):
+            if outcome == "hotkey_error":
+                raise RuntimeError("shortcut already in use")
+            self.alive = True
+
+        def stop(self):
+            self.alive = False
+
+        def is_alive(self):
+            return self.alive
+
+        def join(self):
+            assert not self.alive
+
+    quit_app = Mock()
+
+    class App:
+        menu: list[Any]
+
+        def __init__(self, *args, **kwargs):
+            nonlocal app
+            app = self
+            assert kwargs["quit_button"] is None
+
+        def run(self):
+            nonlocal ui_thread
+            assert timer is not None and listener is not None
+            assert timer.started
+            timer.callback(None)
+            if outcome == "hotkey_error":
+                assert not listener.is_alive()
+                assert "shortcut already in use" in self.menu[0].title
+                self.menu[1].callback(None)
+            else:
+                assert listener.is_alive()
+                ui_thread = False
+                listener.callback()
+            recorder.start.assert_not_called()
+            ui_thread = True
+            timer.callback(None)
+            recorder.start.assert_called_once()
+            # Menu actions use the same dispatcher as the global hotkey.
+            self.menu[1].callback(None)
+            recorder.stop.assert_not_called()
+            timer.callback(None)
+            recorder.stop.assert_called_once()
+            assert recorder.path.exists()
+            process.assert_not_called()
+            if outcome == "event_loop_error":
+                raise RuntimeError("event loop stopped unexpectedly")
+            self.menu[2].callback(None)
+            timer.callback(None)
+            quit_app.assert_not_called()
+            assert recorder.path.exists()
+            closing_status = self.menu[0].title
+            ui_thread = False
+            workers.popleft()()
+            assert self.menu[0].title == closing_status
+            assert not recorder.path.exists()
+            ui_thread = True
+            timer.callback(None)
+            assert self.menu[0].title == closing_status
+            quit_app.assert_called_once()
+
+    modules = {
+        "rumps": SimpleNamespace(App=App, MenuItem=MenuItem, Timer=Timer, quit_application=quit_app),
+    }
+    monkeypatch.setattr(menubar_app.sys, "platform", "darwin")
+    monkeypatch.setattr(menubar_app.importlib, "import_module", modules.__getitem__)
+    monkeypatch.setattr(menubar_app, "_MacOSHotKey", Listener)
+    monkeypatch.setattr(menubar_app, "ThreadPoolExecutor", Executor)
+    monkeypatch.setattr(recording, "Recorder", lambda: recorder)
+    monkeypatch.setattr(pipeline, "process_recording", process)
+    monkeypatch.setattr(config, "get_client_settings", lambda: config.ClientSettings())
+    if outcome == "event_loop_error":
+        with pytest.raises(RuntimeError, match="event loop stopped"):
+            menubar_app.SpacedRepetitionAgentApp().run()
+    else:
+        menubar_app.SpacedRepetitionAgentApp().run()
+    process.assert_called_once_with(recorder.path)
+    recorder.close.assert_called_once()
+    assert app is not None and timer is not None and not timer.started

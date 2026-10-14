@@ -27,7 +27,6 @@ desktop = [
     "spaced-repetition-agent[capture]",
     "sounddevice; sys_platform == 'darwin'",
     "rumps; sys_platform == 'darwin'",
-    "pynput; sys_platform == 'darwin'",
 ]
 dev = [
     "pytest>=8.3",

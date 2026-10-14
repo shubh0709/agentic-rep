@@ -3,11 +3,11 @@
 **Type:** Task
 **Phase:** 2 — Voice capture
 **Priority:** High — makes voice capture available during normal study
-**Status:** TDD scaffold ready — user implementation pending
+**Status:** Implemented — automated checks complete; physical desktop acceptance pending
 **Blocked by:** SRA-204
 **Blocks:** SRA-206
 
-## TDD starting point
+## Original TDD starting point
 
 The assistant has supplied this ticket's tests, typed stubs, and teaching docstrings. **You write the learning-function implementations.** See the [test-first guide](../tests/README.md) for the unit/e2e boundary and implementation order. Focused tests begin red at `NotImplementedError`; after implementing this ticket they must pass. Keep Phase 1 regressions green with `pytest -m 'not phase2' -q`. Later exercises remain visibly red until implemented; the complete default suite must be green for SRA-206. The expected passing results below describe the implemented ticket, not the current scaffold.
 
@@ -17,7 +17,7 @@ Implement `SpacedRepetitionAgentApp` in `src/sra/capture/menubar_app.py`. A glob
 
 ## Where things stand right now
 
-After SRA-204 is implemented and verified, a developer can speak into the microphone from a terminal and verify the resulting entries through search. This ticket adds the menu-bar event loop and global hotkey around that flow. Currently its controller and desktop adapter remain stubs; the hotkey setting and optional desktop dependency declarations are already supplied.
+After SRA-204 is implemented and verified, a developer can speak into the microphone from a terminal and verify the resulting entries through search. This ticket adds the menu-bar event loop and global hotkey around that flow. The controller and lazy desktop adapter are implemented; the hotkey setting and optional desktop dependencies were already supplied.
 
 ## What this ticket unlocks
 
@@ -27,7 +27,7 @@ After SRA-204 is implemented and verified, a developer can speak into the microp
 
 SRA-204 lets Enter presses drive a recorder and the pipeline. SRA-205 makes those same operations available while another application has focus. `menubar_app.py` owns the user interaction: listen for a shortcut, show whether capture is recording or processing, and display the final result. It delegates microphone/file ownership to `Recorder` and audio-to-entry processing to `process_recording()`.
 
-Two parts make this testable. **`CaptureController`** owns the capture state and the order of operations using injected callbacks. **`SpacedRepetitionAgentApp.run()`** connects that controller to real macOS libraries: `rumps` for the menu-bar app and `pynput` for the global hotkey. The controller can be tested without starting a desktop app; the adapter needs real macOS verification.
+Two parts make this testable. **`CaptureController`** owns the capture state and the order of operations using injected callbacks. **`SpacedRepetitionAgentApp.run()`** connects that controller to `rumps` and macOS's exact `RegisterEventHotKey` API. This avoids observing general keyboard input and does not require Accessibility or Input Monitoring permission. The controller can be tested without starting a desktop app; the adapter needs real macOS verification.
 
 ```mermaid
 stateDiagram-v2
@@ -88,7 +88,7 @@ Implement the supplied controller and adapter while retaining the recorder and p
 | [`tests/unit/test_menubar_app.py`](../tests/unit/test_menubar_app.py) | Explicit worker/UI queues expose overlap, cleanup, thread-dispatch, and late-completion mistakes without relying on timing or a live desktop. |
 | [`src/sra/config.py`](../src/sra/config.py), [`.env.example`](../.env.example) | Already supply `HOTKEY_COMBO`; the adapter reads it along with the existing server URL and model settings. |
 | [`tests/unit/test_client_config.py`](../tests/unit/test_client_config.py) | Verifies client option defaults and environment overrides. Actual shortcut registration belongs to desktop integration. |
-| [`pyproject.toml`](../pyproject.toml), [`requirements-lock.txt`](../requirements-lock.txt) | Desktop declarations already include `rumps`/`pynput`; verify their installation and dependency snapshot for the implemented adapter. |
+| [`pyproject.toml`](../pyproject.toml), [`requirements-lock.txt`](../requirements-lock.txt) | Desktop declarations include `rumps` and microphone support; the system hotkey API needs no third-party listener dependency. |
 | [`README.md`](../README.md) | Turns working code into a launchable app by documenting permissions, shortcut configuration, server address, startup, and recovery. |
 
 [`recording.py`](../src/sra/capture/recording.py) still owns audio resources, [`pipeline.py`](../src/sra/capture/pipeline.py) still composes transcription/submission, and [`api_client.py`](../src/sra/client/api_client.py) still owns the HTTP contract. The server returns saved entries before the UI reports success. A manual search using those exact IDs then verifies the complete flow beyond the menu's message.
@@ -96,13 +96,13 @@ Implement the supplied controller and adapter while retaining the recorder and p
 ## What to implement
 
 - Implement the supplied platform-independent `CaptureController` against its queued worker/UI tests, then fill in the lazy `SpacedRepetitionAgentApp.run()` adapter with a real `rumps.App` subclass and the guarded module entry point so `python3 -m sra.capture.menubar_app` launches it. Importing the module must not launch the app or request permissions.
-- Extend client settings with `HOTKEY_COMBO` (default `<ctrl>+<alt>+r`) and the macOS `desktop` extra with `rumps`/`pynput`. Update the lock and setup docs.
-- Register the hotkey through `pynput`. First activation calls SRA-204's recorder `start()`; the next calls `stop()` and passes its finalized WAV to SRA-203's `process_recording`. Reuse the recorder rather than duplicating device/file handling in the UI.
+- Extend client settings with `HOTKEY_COMBO` (default `<ctrl>+<alt>+r`) and the macOS `desktop` extra with `rumps`. Update the lock and setup docs.
+- Register only the configured chord through macOS `RegisterEventHotKey`; do not install a general keyboard event listener. First activation calls SRA-204's recorder `start()`; the next calls `stop()` and passes its finalized WAV to SRA-203's `process_recording`. Reuse the recorder rather than duplicating device/file handling in the UI.
 - Close the recorder after processing, or on capture failure/orderly quit, so its owned audio is removed and microphone released. Keep the WAV until processing finishes. Do not delete arbitrary files passed to the standalone pipeline.
 - Make the state visible: idle, recording, processing, then a saved-entry count or a useful no-speech/error message. Return to idle so another capture can begin.
 - Keep transcription and network work off the UI event loop; marshal UI changes back through the UI's supported mechanism. While processing, ignore or explain additional hotkey activations so a second recording/submission cannot overlap the first.
 - Provide menu actions to start/stop recording and quit. On quit, stop listeners, close active capture resources, and coordinate any in-flight worker cleanup. Explain a timeout as an unknown save outcome, matching SRA-201.
-- Document the macOS microphone and global-hotkey permissions needed in the actual launch environment, how to change the shortcut, how to set the server URL, and the first-run model download. Show useful recovery for denied permissions, unavailable devices, invalid shortcuts, and an unreachable server.
+- Document the macOS microphone permission, that exact hotkey registration needs no Accessibility/Input Monitoring grant, how to change the shortcut, how to set the server URL, and the first-run model download. Show useful recovery for denied microphone access, unavailable devices, invalid/conflicting shortcuts, and an unreachable server.
 
 ## Where to look
 
@@ -159,6 +159,28 @@ Record the macOS version, launch environment, and manual outcomes in the ticket/
 
 ## Verification record
 
+Implementation verification — 2026-10-14:
+
+- Implemented serialized controller states, single background submission, result/error
+  dispatch, saved-ID diagnostics, cleanup, and orderly quit without deleting an
+  in-flight worker's WAV. Added a lazy rumps subclass, queued main-loop dispatch,
+  configurable exact system shortcut, menu actions, and registration failure feedback.
+- **33 menu-bar tests passed**, including exact chord parsing/registration/release,
+  shortcut-conflict fallback, adapter dispatch/quit, and event-loop failure cleanup
+  with fake desktop boundaries.
+- **271 tests passed** with `SRA_RUN_WHISPER_TESTS=1 HF_HUB_OFFLINE=1 .venv/bin/pytest -q`;
+  the actual Whisper fixture ran from cached weights, with no skips. Ruff and
+  Pyright passed. Existing desktop declarations/pins already cover the adapter;
+  no new dependencies were required.
+- Real `rumps` and `sounddevice` imports passed. The command
+  runner reports **zero audio devices**. Physical hotkey delivery, microphone,
+  permission/recovery behavior, responsive native UI, and new IDs confirmed in
+  search remain unverified; no live capture or API submission was performed.
+- README now documents launch, permissions, configuration, model download,
+  recovery, and quit semantics. Desktop acceptance below remains open.
+
+Manual acceptance (pending):
+
 - Date, macOS version, launch environment, and shortcut:
 - Spoken note, created entry IDs, and matching search IDs:
 - Permission/silence/server errors and successful recovery:
@@ -169,5 +191,5 @@ Record the macOS version, launch environment, and manual outcomes in the ticket/
 
 - [ ] All acceptance criteria met
 - [ ] Import smoke test and real hotkey → microphone → pipeline → API → search checks pass and are recorded above
-- [ ] README documents installation, permissions, launch, configuration, and recovery
-- [ ] Focused/completed-ticket tests, Phase 1 regressions, `ruff check .`, and `pyright` pass (all default tests must pass by SRA-206), with only documented opt-in/platform skips
+- [x] README documents installation, permissions, launch, configuration, and recovery
+- [x] Focused/completed-ticket tests, Phase 1 regressions, `ruff check .`, and `pyright` pass (all default tests must pass by SRA-206), with only documented opt-in/platform skips
