@@ -64,14 +64,35 @@ def client(monkeypatch, session):
     assertions see the same data) and table creation short-circuited
     (the `session` fixture already created them against its own engine).
     """
+    from datetime import UTC, datetime
+
     from fastapi.testclient import TestClient
 
     from sra.api.app import create_app
+    from sra.auth.google_oauth import issue_app_credential
+    from sra.config import get_settings
+    from sra.db.models import User
     from sra.db.session import get_session
 
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("AUTH_SIGNING_SECRET", "test-suite-auth-signing-secret-with-entropy")
     monkeypatch.setattr("sra.api.app.init_db", lambda: None)
+    get_settings.cache_clear()
+
+    user = session.exec(select(User).where(User.google_sub == "test-subject")).first()
+    if user is None:
+        user = User(email="test@example.com", display_name="Test User", google_sub="test-subject")
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+    assert user.id is not None
+    credential = issue_app_credential(
+        user.id,
+        signing_secret="test-suite-auth-signing-secret-with-entropy",
+        ttl_seconds=3600,
+        now=datetime.now(UTC),
+    )
 
     app = create_app()
     app.dependency_overrides[get_session] = lambda: session
-    return TestClient(app)
+    return TestClient(app, headers={"Authorization": f"Bearer {credential}"})

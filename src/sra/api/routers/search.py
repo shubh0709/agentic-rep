@@ -3,7 +3,7 @@ from datetime import date
 from fastapi import APIRouter, Depends
 from sqlmodel import Session
 
-from sra.api.deps import get_current_user, get_session
+from sra.api.deps import get_session, require_user
 from sra.api.schemas import EntryOut
 from sra.db.models import User
 from sra.db.repository import search_entries
@@ -16,7 +16,7 @@ def search(
     q: str = "",
     date_from: str | None = None,
     date_to: str | None = None,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_user),
     session: Session = Depends(get_session),
 ) -> list[EntryOut]:
     """

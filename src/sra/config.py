@@ -1,7 +1,7 @@
 """Application configuration, loaded once from environment variables / .env."""
 
 from functools import lru_cache
-from typing import Self
+from typing import Literal, Self
 from urllib.parse import urlsplit
 
 from pydantic import SecretStr, field_validator, model_validator
@@ -27,12 +27,63 @@ class Settings(BaseSettings):
     langsmith_project: str = "spaced-repetition-agent"
     langsmith_endpoint: str = "https://api.smith.langchain.com"
     langsmith_workspace_id: str | None = None
+    google_client_id: str = ""
+    google_client_secret: SecretStr = SecretStr("")
+    google_callback_url: str = "http://127.0.0.1:8000/api/v1/auth/google/callback"
+    google_authorization_endpoint: str = "https://accounts.google.com/o/oauth2/v2/auth"
+    google_token_endpoint: str = "https://oauth2.googleapis.com/token"
+    auth_signing_secret: SecretStr = SecretStr("")
+    auth_credential_ttl_seconds: int = 3600
+    oauth_state_ttl_seconds: int = 600
+    desktop_completion_ttl_seconds: int = 60
+    auth_cookie_name: str = "sra_session"
+    auth_cookie_secure: bool = False
+    auth_cookie_samesite: Literal["lax", "strict"] = "lax"
+    auth_web_redirect_url: str = "/"
+
+    @field_validator("google_callback_url")
+    @classmethod
+    def validate_google_callback_url(cls, value: str) -> str:
+        parsed = urlsplit(value)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.query or parsed.fragment:
+            raise ValueError("GOOGLE_CALLBACK_URL must be an absolute HTTP(S) URL without query or fragment")
+        return value
+
+    @field_validator("auth_credential_ttl_seconds", "oauth_state_ttl_seconds", "desktop_completion_ttl_seconds")
+    @classmethod
+    def validate_positive_auth_ttl(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("authentication lifetimes must be positive")
+        return value
+
+    @field_validator("auth_cookie_samesite")
+    @classmethod
+    def validate_cookie_samesite(cls, value: str) -> str:
+        normalized = value.lower()
+        if normalized not in {"lax", "strict"}:
+            raise ValueError("AUTH_COOKIE_SAMESITE must be lax or strict")
+        return normalized
 
     @model_validator(mode="after")
     def validate_tracing_credentials(self) -> Self:
         if self.langsmith_tracing and not self.langsmith_api_key.get_secret_value().strip():
             raise ValueError("LANGSMITH_API_KEY is required when LANGSMITH_TRACING=true")
         return self
+
+    def require_auth_configuration(self) -> None:
+        """Fail safely at an auth entry point when server secrets are absent."""
+        required = (
+            self.google_client_id,
+            self.google_client_secret.get_secret_value(),
+            self.auth_signing_secret.get_secret_value(),
+        )
+        if not all(value.strip() for value in required):
+            raise ValueError("Google OAuth is not configured")
+        if len(self.auth_signing_secret.get_secret_value()) < 32:
+            raise ValueError("AUTH_SIGNING_SECRET must contain at least 32 characters")
+        callback = urlsplit(self.google_callback_url)
+        if not self.auth_cookie_secure and callback.hostname not in {"127.0.0.1", "localhost", "::1"}:
+            raise ValueError("AUTH_COOKIE_SECURE may be disabled only for localhost development")
 
 
 @lru_cache

@@ -6,7 +6,7 @@ Re-exporting by import (not wrapping) preserves object identity, which
 matters for `app.dependency_overrides[get_session] = ...` in tests.
 """
 
-from sra.auth.dependencies import get_current_user
+from sra.auth.dependencies import get_current_user, require_admin, require_user
 from sra.db.session import get_session
 
-__all__ = ["get_current_user", "get_session"]
+__all__ = ["get_current_user", "get_session", "require_admin", "require_user"]

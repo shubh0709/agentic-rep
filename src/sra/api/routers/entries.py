@@ -3,7 +3,7 @@ from sqlmodel import Session
 
 from sra.agents.ingestion_graph import IngestionState, build_ingestion_graph
 from sra.agents.tracing import trace_agent
-from sra.api.deps import get_current_user, get_session
+from sra.api.deps import get_session, require_user
 from sra.api.schemas import EntryOut, IngestRequest
 from sra.db.models import User
 
@@ -13,7 +13,7 @@ router = APIRouter(prefix="/entries", tags=["entries"])
 @router.post("/ingest", status_code=201, response_model=list[EntryOut])
 def ingest_transcript(
     body: IngestRequest,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_user),
     session: Session = Depends(get_session),
 ) -> list[EntryOut]:
     """
