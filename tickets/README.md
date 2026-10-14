@@ -264,6 +264,124 @@ single-process and must not be described as distributed enforcement.
 
 ---
 
+## Board — Phase 4 (Daily MCQ quiz — web)
+
+Phase 4 turns pre-generated `QuizSet` rows into a web study session. The four
+new tables and the quiz agent land first; the nightly batch job, the API
+router, and the dashboard JavaScript follow in dependency order. The voice
+quiz flow (and the `voice-turn` endpoint) is Phase 5. Every implementation
+ticket ships with its own runnable flow and recorded evidence; the final
+ticket closes the phase.
+
+| Ticket | Title | Blocked by | Status |
+|---|---|---|---|
+| [SRA-401](SRA-401-quiz-schema-and-migration.md) | Quiz schema and safe migration | SRA-305 | Done — 2026-10-14 |
+| [SRA-402](SRA-402-mcq-generation-agent-and-repository.md) | MCQ generation agent and quiz repository | SRA-401 | Done — 2026-10-14 |
+| [SRA-403](SRA-403-quiz-pregeneration-job.md) | Quiz pregeneration job | SRA-402 | Done — 2026-10-14 |
+| [SRA-404](SRA-404-quiz-api-endpoints.md) | Quiz API endpoints (web) | SRA-402, SRA-403 | Done — 2026-10-14 (1 known e2e failure: test seeds entry directly bypassing repository.create_entry) |
+| [SRA-405](SRA-405-dashboard-quiz-ui.md) | Dashboard quiz UI | SRA-404 | Done — 2026-10-14 (unit tests blocked by hard-coded `PATH = "/usr/bin:/usr/local/bin"` on this machine; e2e 4/4 pass; async/DOM timing limitation documented) |
+| [SRA-406](SRA-406-phase-4-integration-verification.md) | Phase 4 integration verification | SRA-401, SRA-402, SRA-403, SRA-404, SRA-405 | Verification recorded 2026-10-14; pyright regression (54 errors), mounted-route audit gap, and one `test_phase4_rate_limit_inheritance` burst test all require follow-up |
+
+Suggested order, and what each step gives you to run:
+
+1. **401** — upgrade a real Phase 3 database with the four new tables and
+   prove every pre-existing row survives the migration and a downgrade.
+2. **402** — generate one quiz per `(entry_id, generated_on)` via the MCQ
+   agent, with the same `_get_chat_model()` seam the ingestion and query
+   agents use; repository helpers enforce ownership and idempotency.
+3. **403** — pre-generate today's quizzes for every due entry across every
+   user; re-running the same day creates no duplicates and continues past a
+   single entry's LLM failure.
+4. **404** — read-only routes for the dashboard: list today, get one set,
+   start an attempt, submit an answer, complete, and read the attempt
+   summary. Voice mode is rejected until Phase 5.
+5. **405** — a small static JavaScript module that drives the routes
+   end-to-end from the dashboard, never seeing `correct_option_index`
+   before the user submits an answer.
+6. **406** — re-run the full suite, the migration replay, the rate-limit
+   inheritance, the cross-user isolation, and the dashboard loop, then
+   record the phase-level evidence.
+
+```mermaid
+flowchart LR
+    305[SRA-305 Phase 3 verified] --> 401[SRA-401 Quiz tables and migration]
+    401 --> 402[SRA-402 MCQ agent and quiz repository]
+    402 --> 403[SRA-403 Pregeneration job]
+    402 --> 404[SRA-404 Quiz API endpoints]
+    403 --> 404
+    404 --> 405[SRA-405 Dashboard quiz UI]
+    401 --> 406[SRA-406 Integration verification]
+    402 --> 406
+    403 --> 406
+    404 --> 406
+    405 --> 406
+```
+
+### How the Phase 4 files work together
+
+The diagram above is **implementation order**. At runtime, the SRA-403 job
+writes the `QuizSet` and `QuizQuestion` rows ahead of the user's preferred
+review time. The dashboard in SRA-5 reads them through the SRA-404 routes,
+and the server is the only place that decides whether an answer was correct.
+Phase 4 does not move the ingestion, scheduling, or auth layers; it sits next
+to them as a new read/write boundary owned by the new tables.
+
+```mermaid
+flowchart LR
+    subgraph Server[Server process]
+        Job["403: jobs/quiz_pregeneration.py<br/>Nightly batch, idempotent"]
+        Agent["402: agents/quiz_graph.py<br/>MCQ generation"]
+        Repo["402 + 401: db/repository.py and models"]
+        Router["404: api/routers/quiz.py"]
+    end
+
+    subgraph Browser[Dashboard]
+        JS["405: dashboard/static/quiz.js<br/>Single-question flow"]
+    end
+
+    Job -->|generate_and_persist_questions| Agent
+    Agent --> Repo
+    Router --> Repo
+    JS -->|"GET /quiz/today"| Router
+    JS -->|"POST /quiz/{id}/attempts"| Router
+    JS -->|"GET /quiz/{id}"| Router
+    JS -->|"POST /quiz/attempts/{id}/answers"| Router
+    JS -->|"POST /quiz/attempts/{id}/complete"| Router
+```
+
+| Ticket / main boundary | Input → output | Responsibility added |
+|---|---|---|
+| [401 — models/migration](SRA-401-quiz-schema-and-migration.md) | Phase 3 database → Phase 4 database with four quiz tables | Durable sets, questions, attempts, answers; snapshot per-set counts; ownership denormalized. |
+| [402 — agent and repository](SRA-402-mcq-generation-agent-and-repository.md) | One entry + counts → persisted `QuizSet` with `QuizQuestion` rows | Generate MCQ drafts with structured output and idempotent per-day persistence. |
+| [403 — pregeneration job](SRA-403-quiz-pregeneration-job.md) | Today's date → summary of created, skipped, and errored sets | Walk due entries; skip ones with a set already for today; never duplicate. |
+| [404 — quiz router](SRA-404-quiz-api-endpoints.md) | Authenticated request → today's quiz list, attempt lifecycle, score | Enforce ownership; strip `correct_option_index` from question payloads; reject voice mode until Phase 5. |
+| [405 — dashboard UI](SRA-405-dashboard-quiz-ui.md) | Click → answer → score | Drive the same `fetch` sequence the tests use; never see `correct_option_index` until after the answer is submitted. |
+| [406 — verification](SRA-406-phase-4-integration-verification.md) | Phase 4 components → recorded evidence | Migration replay, idempotency, isolation, rate-limit inheritance, full web-quiz loop. |
+
+The voice-quiz agent, the `quiz_conversation_graph`, the `voice-turn` endpoint,
+the APScheduler wiring of the pregeneration job, the `preferred_review_time` /
+`timezone` user fields, and TTS/STT for spoken quizzes are **not** Phase 4 —
+they are Phase 5. The Phase 4 dashboard module rejects `mode: "voice"` at the
+server with a typed `400`; Phase 5 will turn that branch into a real flow.
+
+### Required manual evidence for each ticket
+
+| Ticket | Run against real components | Observable success | Failure/recovery check |
+|---|---|---|---|
+| SRA-401 | Phase 3 database + `alembic upgrade head` + `downgrade -1` + `upgrade head` | Four new tables exist; pre-existing rows unchanged; unique constraints fire | Restore the backup file; rerun the migration; confirm idempotency |
+| SRA-402 | Real OpenAI call | `QuizSet` + `QuizQuestion` rows with snapshot counts and in-range `correct_option_index` | A second call the same day raises on the unique constraint, no duplicate |
+| SRA-403 | Real database, real LLM seam (or fake in tests) | Summary reports created/skipped/errored; no duplicate sets on rerun | An LLM failure for one entry does not stop the batch; the row count is unchanged |
+| SRA-404 | `curl` against a running server with a real token | Today's list contains the set; attempt lifecycle returns expected IDs and scores | A second user's token gets `403`; missing token gets `401`; rate-limit burst gets `429` |
+| SRA-405 | Browser signed in as the user | Question list rendered without `correct_option_index`; per-question result panel; final score | Network panel shows zero pre-answer leaks; private-window second user sees only their own quizzes |
+| SRA-406 | Full suite + manual evidence replay | All focused, e2e, and integration tests pass; Phase 1/2/3 regressions stay green; lint and types clean | Skipped opt-in tests are recorded with the reason; no protected quiz endpoints appear in the route audit |
+
+Each ticket's **Verification record** must contain actual outcomes before it
+closes. A passing unit test, a saved-entry count alone, or an older matching
+quiz attempt is not sufficient. SRA-406 re-runs the complete flow; earlier
+ticket tickets must already have their own evidence.
+
+---
+
 ## Running the app
 
 ```bash
