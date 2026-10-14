@@ -111,6 +111,22 @@ class ClientSettings(BaseSettings):
     api_base_url: str = "http://127.0.0.1:8000"
     whisper_model_size: str = "base"
     hotkey_combo: str = "<ctrl>+<alt>+r"
+    desktop_login_timeout_seconds: int = 120
+    keychain_service_prefix: str = "com.spaced-repetition-agent.desktop"
+
+    @field_validator("desktop_login_timeout_seconds")
+    @classmethod
+    def validate_desktop_login_timeout(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("DESKTOP_LOGIN_TIMEOUT_SECONDS must be positive")
+        return value
+
+    @field_validator("keychain_service_prefix")
+    @classmethod
+    def validate_keychain_service_prefix(cls, value: str) -> str:
+        if not value.strip() or any(character.isspace() or ord(character) < 32 for character in value):
+            raise ValueError("KEYCHAIN_SERVICE_PREFIX must be a non-empty value without whitespace")
+        return value
 
     @field_validator("api_base_url")
     @classmethod

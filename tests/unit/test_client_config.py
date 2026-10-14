@@ -31,6 +31,8 @@ def test_defaults_load_without_any_server_credentials():
     assert settings.api_base_url == "http://127.0.0.1:8000"
     assert settings.whisper_model_size == "base"
     assert settings.hotkey_combo == "<ctrl>+<alt>+r"
+    assert settings.desktop_login_timeout_seconds == 120
+    assert settings.keychain_service_prefix == "com.spaced-repetition-agent.desktop"
     assert {"openai_api_key", "langsmith_api_key", "database_url", "google_client_secret"}.isdisjoint(
         type(settings).model_fields
     )
@@ -40,12 +42,16 @@ def test_environment_overrides_client_defaults(monkeypatch):
     monkeypatch.setenv("API_BASE_URL", "https://study.example.test:8443/")
     monkeypatch.setenv("WHISPER_MODEL_SIZE", "tiny")
     monkeypatch.setenv("HOTKEY_COMBO", "<ctrl>+<shift>+s")
+    monkeypatch.setenv("DESKTOP_LOGIN_TIMEOUT_SECONDS", "90")
+    monkeypatch.setenv("KEYCHAIN_SERVICE_PREFIX", "org.example.sra")
 
     settings = get_client_settings()
 
     assert settings.api_base_url == "https://study.example.test:8443/"
     assert settings.whisper_model_size == "tiny"
     assert settings.hotkey_combo == "<ctrl>+<shift>+s"
+    assert settings.desktop_login_timeout_seconds == 90
+    assert settings.keychain_service_prefix == "org.example.sra"
 
 
 def test_dotenv_client_settings_and_environment_precedence(monkeypatch, tmp_path):

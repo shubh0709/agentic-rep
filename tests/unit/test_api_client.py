@@ -196,6 +196,36 @@ def test_redirect_is_an_error_without_a_second_submission(http_boundary):
     assert len(requests) == 1 and clients[0].is_closed
 
 
+@pytest.mark.phase3
+def test_authenticated_submission_sends_bearer_once_without_putting_it_in_url_or_body(http_boundary):
+    credential = "server-issued-application-credential"
+    clients, requests = http_boundary(lambda request: httpx.Response(201, json=[ENTRY]))
+
+    assert ingest_transcript("Mitosis", credential=credential) == [ENTRY]
+
+    assert len(requests) == 1
+    request = requests[0]
+    assert request.headers["authorization"] == f"Bearer {credential}"
+    assert credential not in str(request.url)
+    assert credential not in request.content.decode()
+    assert json.loads(request.content) == {"transcript": "Mitosis"}
+    assert len(clients) == 1 and clients[0].is_closed
+
+
+@pytest.mark.phase3
+def test_authentication_failure_does_not_retry_ingestion(http_boundary):
+    credential = "expired-application-credential"
+    clients, requests = http_boundary(lambda request: httpx.Response(401, json={"detail": "Sign in again"}))
+
+    with pytest.raises(ApiClientError, match="(?i)sign in|401") as caught:
+        ingest_transcript("Mitosis", credential=credential)
+
+    assert caught.value.status_code == 401
+    assert len(requests) == 1
+    assert len(clients) == 1 and clients[0].is_closed
+    assert credential not in str(caught.value)
+
+
 def test_invalid_json_is_a_typed_error_and_closes_client(http_boundary):
     clients, requests = http_boundary(lambda request: httpx.Response(201, text="not JSON"))
     with pytest.raises(ApiClientError, match="(?i)json|response") as caught:
@@ -237,3 +267,26 @@ def test_invalid_entry_fields_are_rejected_even_after_a_valid_entry(http_boundar
     with pytest.raises(ApiClientError):
         ingest_transcript("Mitosis")
     assert len(requests) == 1 and clients[0].is_closed
+@pytest.mark.phase3
+@pytest.mark.parametrize("failure", ["connect", "read", "body", "validation"])
+def test_authenticated_failures_never_echo_credentials(monkeypatch, failure):
+    import traceback
+
+    from sra.client import api_client
+
+    secret = "private-bearer-value"
+
+    def send(request):
+        if failure == "connect":
+            raise httpx.ConnectError(secret, request=request)
+        if failure == "read":
+            raise httpx.ReadError(secret, request=request)
+        if failure == "body":
+            return httpx.Response(502, json={"detail": {"authorization": secret}})
+        return httpx.Response(201, json=[{"id": secret}])
+
+    monkeypatch.setattr(api_client, "_create_http_client", lambda: httpx.Client(transport=httpx.MockTransport(send)))
+    with pytest.raises(api_client.ApiClientError) as caught:
+        api_client.ingest_transcript("A note", credential=secret)
+    assert secret not in "".join(traceback.format_exception(caught.value))
+    assert secret not in repr(caught.value.detail)

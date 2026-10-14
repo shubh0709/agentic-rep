@@ -8,7 +8,7 @@ from sra.client import api_client
 from sra.config import get_client_settings
 
 
-def process_recording(audio_path: Path) -> list[dict[str, Any]]:
+def process_recording(audio_path: Path, *, credential: str | None = None) -> list[dict[str, Any]]:
     """Submit one recording and return the entries created by the server.
 
     Learning task: read get_client_settings().whisper_model_size, then call
@@ -26,4 +26,6 @@ def process_recording(audio_path: Path) -> list[dict[str, Any]]:
     transcript = transcribe(audio_path, model_size=settings.whisper_model_size)
     if not transcript.strip():
         return []
-    return api_client.ingest_transcript(transcript)
+    if credential is None:
+        return api_client.ingest_transcript(transcript)
+    return api_client.ingest_transcript(transcript, credential=credential)

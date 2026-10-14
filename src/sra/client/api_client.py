@@ -63,7 +63,7 @@ def _create_http_client() -> httpx.Client:
     return httpx.Client(timeout=HTTP_TIMEOUT_SECONDS, follow_redirects=False)
 
 
-def ingest_transcript(transcript: str) -> list[dict[str, Any]]:
+def ingest_transcript(transcript: str, *, credential: str | None = None) -> list[dict[str, Any]]:
     """SRA-201: submit text once and return validated entry dictionaries.
 
     Read get_client_settings(), strip a trailing slash from api_base_url, and
@@ -85,23 +85,37 @@ def ingest_transcript(transcript: str) -> list[dict[str, Any]]:
     """
     base_url = get_client_settings().api_base_url.rstrip("/")
     url = f"{base_url}/api/v1/entries/ingest"
+    headers = {"Authorization": f"Bearer {credential}"} if credential is not None else None
     try:
         with _create_http_client() as client:
-            response = client.post(url, json={"transcript": transcript})
+            response = client.post(url, json={"transcript": transcript}, headers=headers)
     except httpx.TimeoutException as exc:
         raise ApiClientError(
             f"Submission to {url} timed out. The server may already have saved the note; "
             "check search before submitting again. No automatic retry was attempted."
-        ) from exc
+        ) from (None if credential is not None else exc)
     except httpx.ConnectError as exc:
+        if credential is not None:
+            raise ApiClientError("Could not connect to the server. Please try again.") from None
         raise ApiClientError(f"Could not connect to {url}: {exc}") from exc
     except httpx.RequestError as exc:
+        if credential is not None:
+            raise ApiClientError(
+                "The HTTP request failed. The save outcome is uncertain; check search before submitting again. "
+                "No automatic retry was attempted."
+            ) from None
         raise ApiClientError(
             f"HTTP request to {url} failed: {exc}. The save outcome is uncertain; "
             "check search before submitting again. No automatic retry was attempted."
         ) from exc
 
     if response.status_code != 201:
+        if credential is not None:
+            # An upstream proxy may echo request headers in its error page.
+            hint = " Please sign in again." if response.status_code in {401, 403} else " Please check the server."
+            raise ApiClientError(
+                f"Ingestion returned HTTP {response.status_code}.{hint}", status_code=response.status_code,
+            )
         detail = None
         try:
             body = response.json()
@@ -119,7 +133,9 @@ def ingest_transcript(transcript: str) -> list[dict[str, Any]]:
     try:
         entries = response.json()
     except ValueError as exc:
-        raise ApiClientError("Invalid JSON in the ingestion response.", status_code=201) from exc
+        raise ApiClientError("Invalid JSON in the ingestion response.", status_code=201) from (
+            None if credential is not None else exc
+        )
 
     try:
         # Strict validation rejects field coercion (e.g. a string or boolean ID).
@@ -127,5 +143,7 @@ def ingest_transcript(transcript: str) -> list[dict[str, Any]]:
         # server fields are preserved verbatim.
         _ENTRY_LIST.validate_python(entries, strict=True)
     except ValidationError as exc:
+        if credential is not None:
+            raise ApiClientError("Invalid entries in the ingestion response.", status_code=201) from None
         raise ApiClientError(f"Invalid entries in the ingestion response: {exc}", status_code=201) from exc
     return entries

@@ -8,6 +8,7 @@ from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from queue import Empty, Queue
+from threading import Event
 from typing import Any, Literal, Protocol
 
 CaptureState = Literal["idle", "recording", "processing", "closed"]
@@ -332,9 +333,17 @@ class SpacedRepetitionAgentApp:
 
         from sra.capture.pipeline import process_recording
         from sra.capture.recording import Recorder
+        from sra.client.auth_client import (
+            DesktopAuthError,
+            MacOSKeychainCredentialStore,
+            load_default_authenticated_account,
+            sign_in,
+            sign_out,
+        )
         from sra.config import get_client_settings
 
-        combo = get_client_settings().hotkey_combo
+        settings = get_client_settings()
+        combo = settings.hotkey_combo
         try:
             _parse_hotkey(combo)
         except ValueError as exc:
@@ -348,13 +357,39 @@ class SpacedRepetitionAgentApp:
                 self.callbacks: Queue[Work] = Queue()
                 self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="sra-capture")
                 self.pending: Future[None] | None = None
+                self.account: Any | None = None
+                self.auth_busy = False
+                self.auth_cancel = Event()
                 self.hotkey_attempted = False
                 self.status_item = rumps.MenuItem("Idle")
                 self.toggle_item = rumps.MenuItem("Start recording", callback=self.toggle_capture)
-                self.menu = [self.status_item, self.toggle_item, rumps.MenuItem("Quit", callback=self.quit_capture)]
-                self.hotkey = _MacOSHotKey(combo, lambda: self.callbacks.put(self.controller.toggle))
+                self.sign_in_item = rumps.MenuItem("Sign in", callback=self.begin_sign_in)
+                self.restore_item = rumps.MenuItem("Use saved sign-in", callback=self.begin_restore)
+                self.sign_out_item = rumps.MenuItem("Sign out", callback=self.begin_sign_out)
+                self.cancel_sign_in_item = rumps.MenuItem("Cancel sign-in", callback=self.cancel_sign_in)
+                self.account_item = rumps.MenuItem("Account: signed out")
+                # Keep Quit in the established position for existing desktop
+                # adapters while adding authentication actions after it.
+                self.menu = [
+                    self.status_item,
+                    self.toggle_item,
+                    rumps.MenuItem("Quit", callback=self.quit_capture),
+                    self.account_item,
+                    self.sign_in_item,
+                    self.restore_item,
+                    self.sign_out_item,
+                    self.cancel_sign_in_item,
+                ]
+                self.keychain = MacOSKeychainCredentialStore(service_prefix=settings.keychain_service_prefix)
+                self.hotkey = _MacOSHotKey(combo, lambda: self.callbacks.put(self.request_capture))
+
+                def authenticated_process(path: Path) -> list[dict[str, Any]]:
+                    if self.account is None:
+                        return process_recording(path)
+                    return process_recording(path, credential=self.account.credential)
+
                 self.controller = CaptureController(
-                    recorder_factory=Recorder, process=process_recording, submit=self.submit,
+                    recorder_factory=Recorder, process=authenticated_process, submit=self.submit,
                     dispatch=self.callbacks.put, show_status=self.show_status, stop_listener=self.hotkey.stop,
                 )
                 # Construct/start the timer on the main thread: rumps attaches it to
@@ -375,9 +410,115 @@ class SpacedRepetitionAgentApp:
                 self.pending = self.executor.submit(work)
 
             def toggle_capture(self, _sender: Any) -> None:
-                self.callbacks.put(self.controller.toggle)
+                self.callbacks.put(self.request_capture)
+
+            def request_capture(self) -> None:
+                if self.auth_busy:
+                    self.show_status("Sign-in work is still in progress")
+                    return
+                self.controller.toggle()
+
+            def _complete_auth(self, message: str) -> None:
+                if self.controller.state == "closed":
+                    return
+                self.auth_busy = False
+                if self.account is None:
+                    self.account_item.title = "Account: signed out"
+                else:
+                    self.account_item.title = f"Account: {self.account.email}"
+                self.show_status(message)
+
+            def begin_sign_in(self, _sender: Any) -> None:
+                self.callbacks.put(self._start_sign_in)
+
+            def _start_sign_in(self) -> None:
+                if self.auth_busy or self.controller.state != "idle":
+                    self.show_status("Finish the current operation before signing in")
+                    return
+                self.auth_busy = True
+                self.auth_cancel.clear()
+                self.show_status("Sign in in your browser")
+
+                def work() -> None:
+                    try:
+                        self.account = sign_in(
+                            api_base_url=settings.api_base_url,
+                            timeout_seconds=settings.desktop_login_timeout_seconds,
+                            store=self.keychain,
+                            cancel_event=self.auth_cancel,
+                        )
+                        message = f"Signed in as {self.account.email}"
+                    except DesktopAuthError as exc:
+                        self.account = None
+                        message = f"Sign-in failed: {exc}"
+                    except Exception:
+                        self.account = None
+                        message = "Sign-in failed unexpectedly. Please try again."
+                    self.callbacks.put(lambda: self._complete_auth(message))
+
+                self.submit(work)
+
+            def cancel_sign_in(self, _sender: Any) -> None:
+                self.auth_cancel.set()
+                if self.auth_busy:
+                    self.show_status("Cancelling sign-in")
+
+            def begin_sign_out(self, _sender: Any) -> None:
+                self.callbacks.put(self._start_sign_out)
+
+            def begin_restore(self, _sender: Any) -> None:
+                self.callbacks.put(self._start_restore)
+
+            def _start_restore(self) -> None:
+                if self.auth_busy or self.controller.state != "idle":
+                    self.show_status("Finish the current operation before restoring sign-in")
+                    return
+                self.auth_busy = True
+                self.show_status("Checking saved sign-in")
+
+                def work() -> None:
+                    try:
+                        self.account = load_default_authenticated_account(
+                            api_base_url=settings.api_base_url,
+                            store=self.keychain,
+                        )
+                        message = f"Signed in as {self.account.email}"
+                    except DesktopAuthError as exc:
+                        self.account = None
+                        message = f"Saved sign-in unavailable: {exc}"
+                    except Exception:
+                        self.account = None
+                        message = "Saved sign-in could not be checked safely. Please sign in again."
+                    self.callbacks.put(lambda: self._complete_auth(message))
+
+                self.submit(work)
+
+            def _start_sign_out(self) -> None:
+                if self.auth_busy or self.controller.state != "idle":
+                    self.show_status("Finish the current operation before signing out")
+                    return
+                if self.account is None:
+                    self.show_status("Already signed out")
+                    return
+                account = self.account
+                self.auth_busy = True
+                self.show_status("Signing out")
+
+                def work() -> None:
+                    try:
+                        sign_out(api_base_url=settings.api_base_url, account=account.subject, store=self.keychain)
+                        self.account = None
+                        message = "Signed out"
+                    except DesktopAuthError as exc:
+                        message = f"Sign-out failed: {exc}"
+                    except Exception:
+                        message = "Sign-out failed unexpectedly. Please try again."
+                    self.callbacks.put(lambda: self._complete_auth(message))
+
+                self.submit(work)
 
             def quit_capture(self, _sender: Any) -> None:
+                self.auth_cancel.set()
                 self.controller.quit()
                 self.show_status("Closing — waiting for any submission and audio cleanup")
 
@@ -406,6 +547,7 @@ class SpacedRepetitionAgentApp:
                     self.timer.start()
                     self.run()
                 finally:
+                    self.auth_cancel.set()
                     try:
                         self.controller.quit()
                     finally:

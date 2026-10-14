@@ -474,7 +474,7 @@ def test_cleanup_error_preserves_processing_error_and_recovers(make_harness):
     assert "cleanup failed: cannot remove WAV" in harness.messages[-1]
 
 
-@pytest.mark.parametrize("outcome", ["success", "pipeline_error", "event_loop_error", "hotkey_error"])
+@pytest.mark.parametrize("outcome", ["success", "pipeline_error", "event_loop_error", "hotkey_error", "restored", "quit_login"])
 def test_desktop_adapter_dispatch_and_shutdown(monkeypatch, tmp_path, outcome):
     """Exercise adapter wiring without Cocoa, device permissions, or real timing."""
     from concurrent.futures import Future
@@ -482,6 +482,7 @@ def test_desktop_adapter_dispatch_and_shutdown(monkeypatch, tmp_path, outcome):
 
     from sra import config
     from sra.capture import menubar_app, pipeline, recording
+    from sra.client import auth_client
 
     ui_thread = True
     workers = deque()
@@ -558,6 +559,9 @@ def test_desktop_adapter_dispatch_and_shutdown(monkeypatch, tmp_path, outcome):
 
     class App:
         menu: list[Any]
+        auth_busy: bool
+        auth_cancel: Any
+        account: Any
 
         def __init__(self, *args, **kwargs):
             nonlocal app
@@ -569,6 +573,24 @@ def test_desktop_adapter_dispatch_and_shutdown(monkeypatch, tmp_path, outcome):
             assert timer is not None and listener is not None
             assert timer.started
             timer.callback(None)
+            if outcome == "quit_login":
+                self.menu[4].callback(None)
+                timer.callback(None)
+                assert self.auth_busy
+                self.menu[2].callback(None)
+                assert self.auth_cancel.is_set()
+                workers.popleft()()
+                timer.callback(None)
+                quit_app.assert_called_once()
+                assert self.account is None
+                return
+            if outcome == "restored":
+                self.menu[5].callback(None)
+                timer.callback(None)
+                assert self.auth_busy
+                workers.popleft()()
+                timer.callback(None)
+                assert self.account.email == "a@example.com"
             if outcome == "hotkey_error":
                 assert not listener.is_alive()
                 assert "shortcut already in use" in self.menu[0].title
@@ -614,11 +636,28 @@ def test_desktop_adapter_dispatch_and_shutdown(monkeypatch, tmp_path, outcome):
     monkeypatch.setattr(recording, "Recorder", lambda: recorder)
     monkeypatch.setattr(pipeline, "process_recording", process)
     monkeypatch.setattr(config, "get_client_settings", lambda: config.ClientSettings())
+    monkeypatch.setattr(
+        auth_client, "load_default_authenticated_account",
+        lambda **_: auth_client.AuthenticatedAccount("a", "a@example.com", "A", "stored-secret"),
+    )
+
+    def cancelled_login(**kwargs):
+        assert kwargs["cancel_event"].is_set()
+        raise auth_client.DesktopAuthError("Sign-in cancelled.")
+
+    monkeypatch.setattr(auth_client, "sign_in", cancelled_login)
     if outcome == "event_loop_error":
         with pytest.raises(RuntimeError, match="event loop stopped"):
             menubar_app.SpacedRepetitionAgentApp().run()
     else:
         menubar_app.SpacedRepetitionAgentApp().run()
-    process.assert_called_once_with(recorder.path)
-    recorder.close.assert_called_once()
+    if outcome == "quit_login":
+        process.assert_not_called()
+        recorder.start.assert_not_called()
+    else:
+        if outcome == "restored":
+            process.assert_called_once_with(recorder.path, credential="stored-secret")
+        else:
+            process.assert_called_once_with(recorder.path)
+        recorder.close.assert_called_once()
     assert app is not None and timer is not None and not timer.started

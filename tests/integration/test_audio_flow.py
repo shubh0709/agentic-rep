@@ -14,7 +14,7 @@ import time
 import wave
 from collections import deque
 from contextlib import contextmanager
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import httpx
@@ -25,6 +25,7 @@ from langchain_core.messages import AIMessage, ToolMessage
 from sqlmodel import Session, select
 
 from sra.agents.schemas import StudyEntryDraft, StudyEntryDrafts
+from sra.auth.google_oauth import issue_app_credential
 from sra.capture.menubar_app import CaptureController
 from sra.capture.pipeline import process_recording
 from sra.capture.recording import Recorder
@@ -86,16 +87,30 @@ def audio_backend(monkeypatch, tmp_path, request):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'study.db'}")
     monkeypatch.setenv("WHISPER_MODEL_SIZE", "base")
+    monkeypatch.setenv("AUTH_SIGNING_SECRET", "offline-audio-fixture-signing-secret")
     get_settings.cache_clear()
     get_client_settings.cache_clear()
     get_engine.cache_clear()
     submissions = []
+    credential = None
 
     @contextmanager
     def running():
+        nonlocal credential
         from sra.api.app import create_app
 
         app = create_app()
+        if credential is None:
+            with Session(get_engine()) as session:
+                user = User(email="audio@example.com", display_name="Audio fixture", google_sub="audio-fixture")
+                session.add(user)
+                session.commit()
+                session.refresh(user)
+                assert user.id is not None
+                credential = issue_app_credential(
+                    user.id, signing_secret="offline-audio-fixture-signing-secret",
+                    ttl_seconds=3600, now=datetime.now(UTC),
+                )
 
         @app.middleware("http")
         async def observe(request, call_next):
@@ -117,7 +132,9 @@ def audio_backend(monkeypatch, tmp_path, request):
                 assert server.started, "Local test API failed to start"
                 monkeypatch.setenv("API_BASE_URL", base)
                 get_client_settings.cache_clear()
-                with httpx.Client(base_url=base, timeout=90, trust_env=False) as client:
+                with httpx.Client(
+                    base_url=base, timeout=90, trust_env=False, headers={"Authorization": f"Bearer {credential}"},
+                ) as client:
                     yield client
             finally:
                 server.should_exit = True
@@ -133,7 +150,7 @@ def audio_backend(monkeypatch, tmp_path, request):
         get_client_settings.cache_clear()
 
 
-def replay_capture(monkeypatch, tmp_path, variant):
+def replay_capture(monkeypatch, tmp_path, variant, credential):
     """Exercise real controller and recorder using a reusable device buffer."""
     with wave.open(str(FIXTURE), "rb") as wav:
         assert (wav.getnchannels(), wav.getsampwidth(), wav.getframerate()) == (1, 2, 16000)
@@ -182,7 +199,7 @@ def replay_capture(monkeypatch, tmp_path, variant):
         assert all(stream.closed for stream in streams)
         with wave.open(str(path), "rb") as wav:
             assert wav.readframes(wav.getnframes()) == pcm
-        entries = process_recording(path)
+        entries = process_recording(path, credential=credential)
         saved.extend(entries)
         return entries
 
@@ -223,7 +240,8 @@ def verify_flow(audio_backend, monkeypatch, tmp_path, variant):
     running, submissions = audio_backend
     original = FIXTURE.read_bytes()
     with running() as client:
-        entries = replay_capture(monkeypatch, tmp_path, variant)
+        credential = client.headers["Authorization"].removeprefix("Bearer ")
+        entries = replay_capture(monkeypatch, tmp_path, variant, credential)
         ids = {entry["id"] for entry in entries}
         assert len(ids) == len(entries)
         assert len(submissions) == 1
@@ -235,7 +253,7 @@ def verify_flow(audio_backend, monkeypatch, tmp_path, variant):
             stored = session.exec(select(StudyEntry)).all()
             assert {entry.id for entry in stored} == ids
             owner = session.exec(select(User)).one()
-            assert owner.email == "local@localhost"
+            assert owner.email == "audio@example.com" and owner.google_sub == "audio-fixture"
             for entry in stored:
                 assert entry.user_id == owner.id and entry.raw_transcript == transcript
                 response = client.get("/api/v1/search", params={"q": entry.topic})
