@@ -20,7 +20,7 @@ class TranscriptSegment(Protocol):
 class WhisperModelLike(Protocol):
     """Keep inference replaceable without importing the optional Whisper package."""
 
-    def transcribe(self, audio: str) -> tuple[Iterable[TranscriptSegment], object]: ...
+    def transcribe(self, audio: str, *, vad_filter: bool = False) -> tuple[Iterable[TranscriptSegment], object]: ...
 
 
 def _create_whisper_model(model_size: str) -> WhisperModelLike:
@@ -86,7 +86,9 @@ def transcribe(audio_path: Path, model_size: str = "base") -> str:
         raise
 
     try:
-        segments, _ = model.transcribe(str(audio_path))
+        # Whisper can hallucinate words on silent input. Filter non-speech before
+        # decoding so silence cannot become a spurious study-note submission.
+        segments, _ = model.transcribe(str(audio_path), vad_filter=True)
         fragments = []
         for segment in segments:
             text = segment.text.strip()

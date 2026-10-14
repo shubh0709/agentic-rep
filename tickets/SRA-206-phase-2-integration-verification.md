@@ -3,16 +3,16 @@
 **Type:** Verification (no new feature code expected)
 **Phase:** 2 — Voice capture
 **Priority:** Highest — the "Phase 2 is actually done" checkpoint
-**Status:** To do — planned
+**Status:** Automated verification complete — physical desktop acceptance pending
 **Blocked by:** SRA-205 (transitively: SRA-201 through SRA-204)
 **Blocks:** Phase 3 kickoff
 
-The automated test scaffold is now prepared, including
+The automated integration coverage is implemented, including
 `tests/e2e/test_client_ingestion_e2e.py`,
 `tests/e2e/test_voice_capture_to_digest_e2e.py`, and
-`tests/e2e/test_terminal_capture_e2e.py`. Learning functions remain for the user
-to implement. The expected green results below are the completion criteria;
-the present TDD red state is documented in the [test guide](../tests/README.md).
+`tests/e2e/test_terminal_capture_e2e.py`. All Phase 2 learning functions are
+implemented and the automated suite is green. Physical microphone, global
+hotkey, native UI, and live-server evidence remain manual completion criteria.
 
 ## Summary
 
@@ -20,7 +20,12 @@ Verify one continuous flow from the real macOS hotkey to recording, local Whispe
 
 ## Where things stand right now
 
-This ticket starts after every earlier ticket has demonstrated its working flow: text client to stored entries (201), real WAV to stored entries (202), the single-call pipeline and due-date checks (203), live microphone capture (204), and the menu-bar hotkey (205). Each must have its own recorded manual evidence. Currently only SRA-201 is complete; SRA-202–205 remain implementation exercises. Once those prerequisites are met, this ticket reruns the complete flow against one server and checks regressions, restart behavior, and phase documentation.
+SRA-201 through SRA-205 are implemented. Their unit and end-to-end coverage is
+green, including the real cached Whisper fixture. SRA-201 has live API evidence;
+the saved-WAV, microphone, and menu-bar tickets still lack their required live
+server/device evidence. This verification pass therefore establishes the
+complete automated path and records the environment limitation without claiming
+that the physical desktop flow or Phase 2 is complete.
 
 ## What this ticket confirms
 
@@ -91,13 +96,13 @@ The runtime files are mapped in the diagram and in [the Phase 2 overview](README
 
 ## Acceptance criteria
 
-- [ ] The full default suite, including Phase 1 and the new voice e2e flow, passes with no unimplemented Phase 2 behavior left
-- [ ] The opt-in real Whisper fixture test passes, including a repeat with cached weights offline
-- [ ] `ruff check .` and `pyright` pass
+- [x] The full default suite, including Phase 1 and the new voice e2e flow, passes with no unimplemented Phase 2 behavior left
+- [x] The opt-in real Whisper fixture test passes, including a repeat with cached weights offline
+- [x] `ruff check .` and `pyright` pass
 - [ ] The manual desktop flow below succeeds against a running server and creates entries for the existing local user
 - [ ] Stored entries retain the transcription result and have six pending checkpoints each; search finds them immediately and the digest shows their first reviews when due
-- [ ] Empty audio and dependency failures recover cleanly; no audio upload, automatic duplicate submission, or app-owned temporary-file leak occurs in the checked paths
-- [ ] Phase-level status, ticket board, and setup documentation reflect verified results and any actual limitations
+- [x] Empty audio and dependency failures recover cleanly; no audio upload, automatic duplicate submission, or app-owned temporary-file leak occurs in the checked paths
+- [x] Phase-level status, ticket board, and setup documentation reflect verified results and any actual limitations
 - [ ] Each preceding ticket has its own completed manual verification record; this final pass does not substitute for missing per-ticket evidence
 
 ## Full test suite
@@ -148,14 +153,51 @@ python3 -m sra.capture.menubar_app
 
 ## Verification record
 
-Fill in when executing this ticket:
+### Additional real-audio automation — 2026-10-14
 
-- Date, macOS version, and launch environment:
-- Whisper model and fixture/manual transcription outcome:
-- Automated test, lint, and type-check results (including skips):
-- New entry IDs and observed transcript/schedule/search/digest results:
-- Hotkey, error recovery, cleanup, and restart checks:
-- Remaining issues, if any:
+- `make test-data`: **280 passed, 1 deselected**. `make test-live`:
+  **1 passed, 7 deselected**, including actual OpenAI extraction and chat.
+- Both tiers run the real spoken fixture through simulated device callbacks,
+  production recorder/controller, Whisper, actual loopback HTTP, and an isolated
+  SQLite database. Assertions cover the exact returned IDs, transcript/ownership,
+  six schedules, search/chat/digest, server/application/engine restart, and cleanup.
+- The fixture suite adds quiet/noisy signals, permission/overflow recovery,
+  silence, corrupt WAV, and hotkey registration failure/recovery. A silent WAV
+  previously produced the hallucinated transcript “You”; enabling Whisper's
+  voice-activity filter fixed this regression without weakening the test.
+- This supersedes the earlier lack of an automated live-provider result below.
+  It does not supply physical microphone/hotkey/UI or per-ticket manual evidence.
+  See [the test guide](../tests/README.md#two-complete-verification-commands).
+
+- **Date, platform, and environment:** 2026-10-14; macOS 26.6.2
+  (build 25G83), Python 3.13.12, project `.venv`. The desktop dependencies
+  import, but `sounddevice` 0.5.6 reports zero available devices in this agent
+  environment.
+- **Whisper:** the `base` model transcribed `tests/fixtures/study_note.wav` and
+  matched the expected keywords with `HF_HUB_OFFLINE=1`, proving the cached
+  model works without a download.
+- **Automated gates:** default suite **259 passed, 1 skipped** (the opt-in
+  Whisper case); end-to-end suite **16 passed**; explicit offline Whisper test
+  **1 passed**; the complete opt-in run **260 passed**. `ruff check .` and
+  `pyright` both passed with no findings.
+- **Storage and scheduling evidence:** isolated end-to-end tests followed the
+  newly returned IDs through persistence and search, retained the exact
+  transcript and local-user ownership, created six pending checkpoints per
+  entry, excluded new reviews on capture day, and returned their `1d` reviews
+  on the next day without modifying stored dates. These are automated test IDs,
+  not claimed as live desktop captures.
+- **Recovery and cleanup evidence:** tests cover silence, missing audio, late
+  decoding failure, server rejection, a response lost after persistence,
+  cancellation, callback/write failures, subsequent successful attempts,
+  device closure, and owned-file cleanup. They also assert one HTTP submission,
+  no automatic retry, and transcript-only upload. Cached Whisper restart
+  behavior is covered by the offline run.
+- **Remaining manual evidence:** no input device is exposed here, so physical
+  microphone capture, cross-application hotkey delivery, native UI feedback,
+  permission denial/recovery, restart capture, live OpenAI-backed IDs, chat,
+  read-only database inspection, and live due-date digest verification were not
+  performed. SRA-204, SRA-205, SRA-206, and Phase 2 remain open until those
+  checks are recorded on a Mac with an accessible microphone.
 
 ## After this ticket closes
 

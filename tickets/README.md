@@ -53,10 +53,10 @@ Learning-target functions are typed stubs with teaching docstrings. At the user'
 |---|---|---|---|
 | [SRA-201](SRA-201-text-capture-api-client.md) | Text capture through the HTTP client | SRA-107 (done) | Done — 2026-10-13; live API/search and recovery verified |
 | [SRA-202](SRA-202-local-whisper-transcription.md) | Local Whisper transcription into saved study entries | SRA-201 | Implemented; automated checks complete |
-| [SRA-203](SRA-203-recording-to-ingestion-pipeline.md) | Recording-to-ingestion pipeline | SRA-202 | TDD scaffold ready; implement |
-| [SRA-204](SRA-204-microphone-capture.md) | Microphone capture through the working pipeline | SRA-203 | TDD scaffold ready; implement |
-| [SRA-205](SRA-205-menubar-hotkey-capture.md) | macOS menu-bar hotkey capture | SRA-204 | TDD scaffold ready; implement |
-| [SRA-206](SRA-206-phase-2-integration-verification.md) | Phase 2 integration verification | SRA-205 | To do — planned |
+| [SRA-203](SRA-203-recording-to-ingestion-pipeline.md) | Recording-to-ingestion pipeline | SRA-202 | Implemented; automated checks complete; live submission pending approval |
+| [SRA-204](SRA-204-microphone-capture.md) | Microphone capture through the working pipeline | SRA-203 | Implemented; automated checks complete; real microphone acceptance pending |
+| [SRA-205](SRA-205-menubar-hotkey-capture.md) | macOS menu-bar hotkey capture | SRA-204 | Implemented; automated checks complete; real desktop acceptance pending |
+| [SRA-206](SRA-206-phase-2-integration-verification.md) | Phase 2 integration verification | SRA-205 | Automated verification complete; physical desktop acceptance pending |
 
 Suggested order, and what each step gives you to run:
 
@@ -79,7 +79,7 @@ flowchart LR
 
 ### How the Phase 2 files work together
 
-The diagram above is **implementation order**. At runtime, the eventual desktop flow starts at SRA-205 and calls down through the earlier components. Phase 2 adds ways to obtain and submit text; Phase 1 continues to extract study topics, save data, and schedule reviews. Currently SRA-201 and SRA-202 are implemented; the pipeline/desktop functions shown below are the intended flow once SRA-203–205 are complete.
+The diagram above is **implementation order**. At runtime, the eventual desktop flow starts at SRA-205 and calls down through the earlier components. Phase 2 adds ways to obtain and submit text; Phase 1 continues to extract study topics, save data, and schedule reviews. SRA-201 through SRA-205 are implemented. Real microphone and global-hotkey acceptance remain pending.
 
 ```mermaid
 flowchart LR
@@ -148,9 +148,14 @@ Phase 2 retains the single local user. OAuth/token storage, multi-tenancy, RBAC,
 
 ### Testing Phase 2 as it is implemented
 
-Files, tests, and optional `capture` / `desktop` dependency declarations are present. Runtime implementations and optional-dependency lock verification remain exercises. Default unit and e2e tests use fake inference/audio devices and isolated HTTP/DB wiring. The real Whisper fixture check is opt-in; real microphone, menu-bar permissions, and hotkey delivery are verified on macOS. Do not interpret a platform skip as completed desktop verification.
+Files, tests, runtime implementations, and optional `capture` / `desktop`
+dependency declarations are present. Default unit and e2e tests use fake
+inference/audio devices and isolated HTTP/DB wiring. The real Whisper fixture
+check is opt-in; real microphone, menu-bar permissions, and hotkey delivery are
+verified on macOS. Do not interpret a platform skip as completed desktop
+verification.
 
-After the corresponding tickets are implemented:
+Current Phase 2 checks:
 
 ```bash
 pytest tests/unit/test_client_config.py tests/unit/test_transcription.py tests/unit/test_api_client.py tests/unit/test_capture_pipeline.py tests/unit/test_recording.py -v
@@ -160,7 +165,9 @@ SRA_RUN_WHISPER_TESTS=1 pytest tests/integration/test_transcription_whisper.py -
 pytest tests/unit/test_menubar_app.py -v
 ```
 
-The ticket documents specify expected behavior; the prepared tests currently fail at the teaching stubs. Record actual passing results when implementing and verifying each ticket. Use `pytest -m 'not phase2' -q` for Phase 1 regressions during the red stage; the full suite stays visible.
+The automated suite is green. Record actual results for any rerun rather than
+copying historical counts. Physical desktop and live-server evidence remains
+required in the individual tickets and SRA-206 before Phase 2 is complete.
 
 ---
 

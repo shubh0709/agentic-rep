@@ -50,6 +50,7 @@ markers = [
     "phase2: voice-capture teaching contracts (intentionally red until implemented)",
     "whisper: opt-in real local Whisper inference",
     "desktop: requires macOS and installed desktop dependencies",
+    "live_openai: explicit opt-in calls to the real OpenAI service",
 ]
 
 [tool.ruff]

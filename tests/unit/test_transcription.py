@@ -126,7 +126,7 @@ def test_transcribe_consumes_segments_in_order_and_uses_requested_model(monkeypa
     assert transcription.transcribe(audio_file, model_size="tiny") == "Photosynthesis uses  sunlight. Oxygen is released."
     assert len(consumed) == 4
     loader.assert_called_once_with("tiny")
-    model.transcribe.assert_called_once_with(str(audio_file))
+    model.transcribe.assert_called_once_with(str(audio_file), vad_filter=True)
 
 
 def test_transcribe_defaults_to_base_model(monkeypatch, audio_file):
@@ -206,7 +206,7 @@ def test_corrupt_audio_decoder_failure_preserves_file_and_cause(monkeypatch, tmp
     assert raised.value.__cause__ is cause
     assert str(raised.value).strip()
     assert path.read_bytes() == original
-    model.transcribe.assert_called_once_with(str(path))
+    model.transcribe.assert_called_once_with(str(path), vad_filter=True)
 
 
 def test_model_loading_error_reaches_caller_unchanged(monkeypatch, audio_file):

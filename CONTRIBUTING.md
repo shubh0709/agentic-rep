@@ -33,14 +33,12 @@ CI (`.github/workflows/ci.yml`) runs the same three checks on every push and
 PR, so `pre-commit` catches things locally and CI is the backstop if a hook
 was skipped or bypassed.
 
-SRA-201's HTTP client and SRA-202's transcription wrapper are implemented. The
-remaining Phase 2 functions are exercises and their tests intentionally fail until you
-implement them. Run
-`pytest -m 'not phase2' -q` to protect the completed Phase 1 behavior while working
-through the ticket-specific tests in [tests/README.md](tests/README.md). Keep
-implemented-ticket tests green; remaining Phase 2 failures stay visible in the
-full suite and CI. Do not add `xfail` or assert `NotImplementedError` to hide them.
-The full suite must be green before Phase 2 integration verification closes.
+SRA-201 through SRA-205 are implemented. Run the full `pytest` suite to protect
+both phases; `pytest -m 'not phase2' -q` isolates Phase 1 regressions.
+Ticket-specific commands are in [tests/README.md](tests/README.md). Real Whisper
+inference is opt-in, and physical microphone/global-hotkey acceptance remains
+part of SRA-206 verification. Do not hide unfinished behavior with `xfail` or
+assertions expecting `NotImplementedError`.
 
 ## Reproducible installs
 
@@ -56,7 +54,7 @@ pip install -r requirements-lock.txt   # exact versions, for reproducing an envi
 Regenerate it after adding or upgrading a dependency in `pyproject.toml`:
 
 ```bash
-pip install -e ".[dev]"
+pip install -e ".[dev,desktop]"
 pip freeze --exclude-editable > requirements-lock.txt
 ```
 
@@ -70,12 +68,15 @@ pip check
 pytest tests/unit/test_client_config.py tests/unit/test_api_client.py tests/e2e/test_client_ingestion_e2e.py -q
 ```
 
-The snapshot and capture extra include `faster-whisper`; macOS `desktop`
-dependencies are declared but are not represented in this snapshot. Default
+The snapshot includes `faster-whisper` and the macOS `desktop` extra. Desktop-only
+pins carry `sys_platform == "darwin"`; preserve these markers when regenerating
+on macOS so Linux server installs do not attempt to install PyObjC. Default
 tests fake those boundaries.
 Real Whisper checks explicitly opt in with `SRA_RUN_WHISPER_TESTS=1`; see the
-test guide for installation and fixture details. Regenerate and verify the
-optional-dependency snapshot when implementing audio support.
+test guide for installation and fixture details. To verify desktop dependencies in a clean macOS environment, install the lockfile,
+then `pip install -e '.[dev,desktop]' -c requirements-lock.txt` and run `pip check`.
+Installing into a shared development environment may expose unrelated package
+conflicts; use a fresh virtual environment to verify this project’s dependency set.
 
 ## Schema migrations (Alembic)
 

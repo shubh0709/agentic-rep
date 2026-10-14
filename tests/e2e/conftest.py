@@ -146,7 +146,8 @@ def whisper_boundary(monkeypatch):
     )
 
     class FakeWhisper:
-        def transcribe(self, path):
+        def transcribe(self, path, *, vad_filter=False):
+            assert vad_filter is True
             boundary.paths.append(path)
             with wave.open(str(path), "rb") as wav:
                 boundary.audio_reads.append({

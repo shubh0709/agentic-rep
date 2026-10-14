@@ -62,7 +62,17 @@ Ingestion agent + scheduler + minimal API, exercised via pasted transcript text 
 
 ## Phase 2 — Voice capture
 
-**Status: SRA-201 and SRA-202 completed on 2026-10-13; SRA-203–205 remain teaching stubs.** [SRA-201 through SRA-206](tickets/README.md#board--phase-2-voice-capture) cover the plan's U4/U5 and the technical design's client/server split. The assistant supplies tests and teaching docstrings; implementations proceed one ticket at a time. Each implementation ticket must deliver its manual flow, verify newly created IDs through search, and record a failure/recovery check. Focused completed-ticket checks and Phase 1 regressions must stay green; future exercises intentionally keep the full suite red until implemented. See [tests/README.md](tests/README.md).
+- **Real-audio automation — 2026-10-14:** added `make test-data` (280 passed,
+  1 live case deselected) and `make test-live` (1 passed, 7 fixture cases
+  deselected). Both replay the spoken fixture through the recorder/controller,
+  real Whisper, loopback HTTP, isolated SQLite, scheduling, search/chat/digest,
+  and application/engine restart. The live run verified actual OpenAI extraction
+  and chat. Added quiet/noisy audio, permission/overflow recovery, corrupt input,
+  and native-shortcut failure/recovery coverage. Real silence exposed a Whisper
+  hallucination; enabled voice-activity filtering and verified zero submissions
+  for the silent fixture. Physical desktop acceptance remains outstanding.
+
+**Status: SRA-201 through SRA-205 are implemented; physical desktop acceptance remains pending.** [SRA-201 through SRA-206](tickets/README.md#board--phase-2-voice-capture) cover the plan's U4/U5 and the technical design's client/server split. The assistant supplies tests and teaching docstrings; implementations proceed one ticket at a time. Each implementation ticket must deliver its manual flow, verify newly created IDs through search, and record a failure/recovery check. Focused completed-ticket checks and Phase 1 regressions must stay green; future exercises intentionally keep the full suite red until implemented. See [tests/README.md](tests/README.md).
 
 - Added unit contracts for isolated configuration, HTTP validation/errors/no retries, lazy local inference, pipeline composition, recorder WAV/lifecycle/cleanup, and queued menu-bar controller behavior.
 - Added end-to-end tests through real client/transcription wrappers, FastAPI, graph, repository, SQLite, scheduling, search, and due-date digest. Only external inference and HTTP location are replaced; timeout-after-save, silence, failures, and recovery are included.
@@ -77,11 +87,28 @@ Ingestion agent + scheduler + minimal API, exercised via pasted transcript text 
 
 - **SRA-202 verification — 2026-10-13:** **40 focused configuration/transcription tests**, the opt-in real-Whisper fixture test, and **91 Phase 1 regressions passed**; Ruff and Pyright passed. The cached `base` model transcribed the fixture with `HF_HUB_OFFLINE=1`. A clean Python 3.13 environment installed the pinned capture dependencies and passed `pip check`. PyAV is constrained below 19 because the current `faster-whisper` 1.2.1 release still passes an argument removed in PyAV 19. Full suite: **185 passed, 61 failed, 2 skipped**; failures are confined to SRA-203–205 teaching stubs. The live transcript-to-server flow remains unrecorded because it requires a running model-backed API.
 
+- **SRA-203 implementation — 2026-10-13:** implemented the one-call recording pipeline with configured model selection, exact transcript forwarding, silence short-circuiting, and unchanged typed failures/file ownership. Added saved-WAV usage documentation. **15 focused tests**, **108 completed-ticket tests**, and **91 Phase 1 regressions passed**; Ruff and Pyright passed. The e2e flow verified transcript/ownership persistence, six schedules per entry, search, capture-day exclusion, next-day `1d` digest visibility, input preservation, failures, and recovery. Full suite: **200 passed, 46 failed, 2 skipped**; failures are confined to SRA-204–205 stubs. A real OpenAI-backed submission remains pending explicit approval to transmit the fixture-derived transcript externally.
+
+
+- **SRA-204 implementation — 2026-10-14:** implemented lazy microphone access, unique owned temporary WAVs, copied PCM buffers, strict one-capture lifecycle, device/file cleanup on failure or cancellation, and Enter-to-start/stop terminal ingestion. CLI reports actual IDs/topics, silence, typed errors, and unchanged timeout uncertainty. Added setup, permissions, search-ID comparison, and cleanup inspection instructions. **38 focused tests**, **146 completed-ticket tests**, and **91 Phase 1 regressions pass**; Ruff/Pyright pass. Full suite: **239 passed, 15 failed, 1 skipped**, with all failures in unchanged SRA-205 stubs and the opt-in Whisper check skipped. Desktop dependencies installed; the command runner reports no audio devices, so real spoken-note/search and physical failure/recovery acceptance remain pending.
+
+- **SRA-205 implementation — 2026-10-14:** implemented the capture controller and lazy macOS adapter, exact global-shortcut/menu dispatch through the UI loop, background processing, saved counts/IDs, error recovery, overlap prevention, and orderly hotkey/worker/WAV cleanup. Replaced the general `pynput` event listener with macOS `RegisterEventHotKey`, so only the configured chord is registered and Accessibility/Input Monitoring access is unnecessary. Added chord parsing, registration/release, shortcut-conflict fallback, adapter wiring, and failure-cleanup tests plus README setup/recovery instructions. **33 menu-bar tests passed; all 271 tests passed**, including real Whisper with cached weights (`SRA_RUN_WHISPER_TESTS=1 HF_HUB_OFFLINE=1`). Ruff and Pyright passed. Real desktop libraries import successfully, but the command runner exposes **zero audio devices**; physical microphone/hotkey/UI acceptance and live search-ID evidence remain pending.
+
+- **SRA-206 automated verification — 2026-10-14:** the default suite passed
+  **259 tests** with only the opt-in Whisper case skipped; all **16 e2e tests**
+  passed. Enabling real Whisper with cached weights and offline mode produced a
+  fully green **260-test** run. Ruff and Pyright passed. The e2e coverage verifies
+  exact returned IDs, transcript/ownership persistence, six pending schedules,
+  search, next-day digest visibility, failure recovery, single submission, and
+  recorder cleanup. Phase 2 remains open because this runner exposes zero audio
+  devices, so the required physical microphone, global-hotkey/native-UI,
+  live-server, restart, and per-ticket manual evidence could not be recorded.
+
 - [x] [SRA-201](tickets/SRA-201-text-capture-api-client.md) — client config + `src/sra/client/api_client.py`: typed note → API → stored entries → search
 - [x] [SRA-202](tickets/SRA-202-local-whisper-transcription.md) — `src/sra/capture/transcription.py`: real WAV → local Whisper transcription boundary (manual server-flow evidence remains environment-dependent)
-- [ ] [SRA-203](tickets/SRA-203-recording-to-ingestion-pipeline.md) — `src/sra/capture/pipeline.py`: one-call audio ingestion, no-speech/error handling, storage and due-date digest checks
-- [ ] [SRA-204](tickets/SRA-204-microphone-capture.md) — `src/sra/capture/recording.py`: live microphone → terminal start/stop → pipeline → searchable entries, with cleanup
-- [ ] [SRA-205](tickets/SRA-205-menubar-hotkey-capture.md) — `src/sra/capture/menubar_app.py`: hotkey/UI around the proven recorder and pipeline, verified through search
+- [x] [SRA-203](tickets/SRA-203-recording-to-ingestion-pipeline.md) — `src/sra/capture/pipeline.py`: one-call audio ingestion, no-speech/error handling, storage and due-date digest checks (live external submission pending approval)
+- [ ] [SRA-204](tickets/SRA-204-microphone-capture.md) — `src/sra/capture/recording.py`: implemented and automated checks pass; real microphone/search acceptance pending
+- [ ] [SRA-205](tickets/SRA-205-menubar-hotkey-capture.md) — `src/sra/capture/menubar_app.py`: implemented hotkey/UI around the recorder and pipeline; physical desktop/search acceptance pending
 - [ ] [SRA-206](tickets/SRA-206-phase-2-integration-verification.md) — automated regression checks plus real desktop-to-digest verification
 
 Phase 2 retains Phase 1's single local user and server-side OpenAI agents. Only transcript text is submitted; raw audio stays local. Authentication remains Phase 3, and wake-up/TTS/voice quiz remain Phase 5. The scaffold and tests now exist; runtime behavior and manual verification remain incomplete.
