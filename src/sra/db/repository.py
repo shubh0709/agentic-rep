@@ -435,3 +435,22 @@ def get_quiz_attempt(user_id: int, attempt_id: int, session: Session) -> QuizAtt
         QuizAttempt.user_id == user_id,  # pyright: ignore[reportArgumentType]
     )
     return session.exec(statement).first()
+
+
+def get_quiz_questions(quiz_set_id: int, session: Session) -> list[QuizQuestion]:
+    """Return the quiz set's questions ordered by ``order_index`` ASC."""
+    statement = (
+        select(QuizQuestion)
+        .where(QuizQuestion.quiz_set_id == quiz_set_id)
+        .order_by(QuizQuestion.order_index)  # pyright: ignore[reportArgumentType]
+    )
+    return list(session.exec(statement).all())
+
+
+def advance_quiz_cursor(*, attempt: QuizAttempt, session: Session) -> QuizAttempt:
+    """Increment ``attempt.cursor`` by 1 and commit. Returns the refreshed attempt."""
+    attempt.cursor = attempt.cursor + 1
+    session.add(attempt)
+    session.commit()
+    session.refresh(attempt)
+    return attempt

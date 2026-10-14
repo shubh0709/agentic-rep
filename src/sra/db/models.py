@@ -282,6 +282,7 @@ class QuizAttempt(QuizAttemptBase, table=True):
     started_at: datetime = Field(default_factory=_utcnow)
     completed_at: datetime | None = None
     score: int | None = None
+    cursor: int = 0
 
 
 class QuizAnswerBase(SQLModel):
