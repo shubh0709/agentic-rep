@@ -14,6 +14,8 @@ dependencies = [
     "langsmith>=0.14",
     "python-dateutil>=2.9",
     "alembic>=1.13",
+    "google-auth[requests]>=2.38,<3",
+    "httpx>=0.27,<1",
 ]
 
 [project.optional-dependencies]
@@ -25,6 +27,7 @@ capture = [
 ]
 desktop = [
     "spaced-repetition-agent[capture]",
+    "keyring>=25,<26; sys_platform == 'darwin'",
     "sounddevice; sys_platform == 'darwin'",
     "rumps; sys_platform == 'darwin'",
 ]
@@ -48,6 +51,7 @@ testpaths = ["tests"]
 pythonpath = ["src"]
 markers = [
     "phase2: voice-capture teaching contracts (intentionally red until implemented)",
+    "phase3: authentication, isolation, desktop credential, and rate-limit TDD contracts",
     "whisper: opt-in real local Whisper inference",
     "desktop: requires macOS and installed desktop dependencies",
     "live_openai: explicit opt-in calls to the real OpenAI service",

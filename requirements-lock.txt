@@ -8,6 +8,7 @@ cfgv==3.5.0
 charset-normalizer==3.5.2
 click==8.5.0
 ctranslate2==4.8.3
+cryptography==50.0.2
 distlib==0.4.3
 distro==1.9.0
 fastapi==0.142.2
@@ -15,6 +16,7 @@ faster-whisper==1.2.1
 filelock==4.0.12
 flatbuffers==25.12.19
 fsspec==2026.9.0
+google-auth==2.60.0
 h11==0.16.0
 httpcore==1.0.9
 httpcore2==2.13.1
@@ -26,6 +28,9 @@ huggingface-hub==2.2.0
 identify==2.6.20
 idna==3.20
 iniconfig==2.3.1
+jaraco.classes==3.4.0; sys_platform == "darwin"
+jaraco.context==6.1.2; sys_platform == "darwin"
+jaraco.functools==4.6.0; sys_platform == "darwin"
 jiter==0.17.0
 jsonpatch==1.33
 jsonpointer==3.2.0
@@ -38,8 +43,10 @@ langgraph-checkpoint==4.2.0
 langgraph-prebuilt==1.1.0
 langgraph-sdk==0.4.6
 langsmith==0.14.4
+keyring==25.7.0; sys_platform == "darwin"
 Mako==1.4.3
 MarkupSafe==3.0.4
+more-itertools==11.2.0; sys_platform == "darwin"
 nodeenv==1.11.0
 numpy==2.5.4
 onnxruntime==1.31.0
@@ -55,6 +62,8 @@ pydantic==2.13.5
 pydantic-settings==2.15.0
 pydantic_core==2.46.5
 Pygments==2.21.0
+pyasn1==0.6.4
+pyasn1_modules==0.4.2
 pyright==1.1.414
 pytest==9.1.1
 protobuf==7.36.2
