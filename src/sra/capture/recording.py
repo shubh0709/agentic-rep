@@ -216,6 +216,22 @@ class Recorder:
                 self.close()
 
 
+def record_audio() -> Path:
+    """Record one capture from the microphone and return its finalized WAV path.
+
+    Blocks on Enter to start, Enter to stop. The WAV lifecycle is owned by
+    the :class:`Recorder` context manager; cleanup happens on every exit
+    path. Callers own any downstream transcription/ingestion -- this
+    helper only produces a readable PCM WAV path.
+    """
+    input("Press Enter to start recording (Ctrl-C to cancel): ")
+    with Recorder() as recorder:
+        recorder.start()
+        print("Recording…", flush=True)
+        input("Press Enter to stop recording: ")
+        return recorder.stop()
+
+
 def main() -> int:
     """Run Enter-to-start, Enter-to-stop capture, then process the WAV once.
 
