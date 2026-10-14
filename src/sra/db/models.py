@@ -3,9 +3,10 @@ ORM models (SQLModel). Written out in full -- these aren't a learning
 stub, since the schema itself is a design decision this project has
 already made (see docs/design/technical-design.md section 2).
 
-Phase 1 keeps User deliberately minimal (no role/OAuth/preference
-fields yet) -- those get added in later phases as the features that
-need them land, rather than speculatively now.
+User carries the Phase 3 identity fields needed to map a verified Google
+identity to a durable local row.  ``google_sub`` remains nullable only so a
+database created before OAuth can be upgraded without losing its local user;
+the verified-login path requires a non-empty subject.
 
 Convention: any table a caller can create with user-influenced data
 gets a `<Name>Base`/`<Name>Create` split, not just a single `table=True`
@@ -23,13 +24,23 @@ this shape for every new table.
 """
 
 from datetime import UTC, date, datetime
+from enum import StrEnum
 
+from pydantic import field_validator
+from sqlalchemy import CheckConstraint, Enum
 from sqlmodel import JSON, Column, Field, SQLModel
 
 
 def _utcnow() -> datetime:
     """Timezone-aware "now" -- this SQLModel version rejects naive datetimes on write."""
     return datetime.now(UTC)
+
+
+class UserRole(StrEnum):
+    """Roles with observable Phase 3 authorization behavior."""
+
+    USER = "user"
+    ADMIN = "admin"
 
 
 class UserBase(SQLModel):
@@ -45,9 +56,40 @@ class UserCreate(UserBase):
 
 class User(UserBase, table=True):
     __tablename__ = "users"  # pyright: ignore[reportAssignmentType] -- SQLAlchemy's declared_attr typing, not a real error
+    __table_args__ = (
+        CheckConstraint("role IN ('user', 'admin')", name="ck_users_role"),
+        CheckConstraint(
+            "google_sub IS NULL OR length(trim(google_sub)) > 0",
+            name="ck_users_google_sub_nonempty",
+        ),
+    )
 
     id: int | None = Field(default=None, primary_key=True)
+    # Nullable only for preserved pre-OAuth local users. Every user created by
+    # the Phase 3 OAuth path must have a non-empty, provider-verified subject.
+    google_sub: str | None = Field(default=None, unique=True, index=True)
+    role: UserRole = Field(
+        default=UserRole.USER,
+        sa_column=Column(
+            Enum(
+                UserRole,
+                values_callable=lambda roles: [role.value for role in roles],
+                native_enum=False,
+            ),
+            nullable=False,
+            server_default=UserRole.USER.value,
+        ),
+    )
+    last_login_at: datetime | None = None
     created_at: datetime = Field(default_factory=_utcnow)
+
+    @field_validator("google_sub")
+    @classmethod
+    def validate_google_sub(cls, value: str | None) -> str | None:
+        """Allow a legacy NULL, but never an empty external identity key."""
+        if value is not None and not value.strip():
+            raise ValueError("google_sub must be non-empty when supplied")
+        return value
 
 
 class StudyEntryBase(SQLModel):

@@ -1,5 +1,5 @@
 import pytest
-from sqlmodel import Session, SQLModel, create_engine
+from sqlmodel import Session, SQLModel, create_engine, select
 from sqlmodel.pool import StaticPool
 
 import sra.db.models  # noqa: F401  (registers tables on SQLModel.metadata)
@@ -35,7 +35,10 @@ def session():
 def seeded_user(session):
     from sra.db.models import User
 
-    user = User(email="test@example.com", display_name="Test User")
+    user = session.exec(select(User).where(User.google_sub == "test-subject")).first()
+    if user is not None:
+        return user
+    user = User(email="test@example.com", display_name="Test User", google_sub="test-subject")
     session.add(user)
     session.commit()
     session.refresh(user)
@@ -46,7 +49,7 @@ def seeded_user(session):
 def other_user(session):
     from sra.db.models import User
 
-    user = User(email="other@example.com", display_name="Other User")
+    user = User(email="other@example.com", display_name="Other User", google_sub="other-subject")
     session.add(user)
     session.commit()
     session.refresh(user)

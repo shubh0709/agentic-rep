@@ -101,7 +101,8 @@ def assert_saved_capture(session, client):
         assert len(ids) == 2
         users = session.exec(select(User)).all()
         assert len(users) == 1
-        assert users[0].email == "local@localhost"
+        assert users[0].email == "test@example.com"
+        assert users[0].google_sub == "test-subject"
         stored_entries = session.exec(select(StudyEntry)).all()
         assert {entry.id for entry in stored_entries} == ids
         for entry in stored_entries:
