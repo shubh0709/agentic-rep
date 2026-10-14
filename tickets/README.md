@@ -171,6 +171,99 @@ required in the individual tickets and SRA-206 before Phase 2 is complete.
 
 ---
 
+## Board — Phase 3 (Multi-tenancy, auth, RBAC, rate limiting)
+
+Phase 3 replaces the trusted local-user placeholder with verified identity. The
+database and repository already carry `user_id`; these tickets migrate the
+existing user row, establish Google-backed credentials, make desktop capture
+authenticate, and enforce per-principal request bounds. Every implementation
+ticket must include a runnable result and failure/recovery evidence. Default
+automation substitutes Google, browser, Keychain, model, and hardware boundaries
+explicitly; real OAuth and macOS acceptance remain required before the phase
+closes.
+
+| Ticket | Title | Blocked by | Status |
+|---|---|---|---|
+| [SRA-301](SRA-301-oauth-user-schema-migration.md) | OAuth identity schema and safe legacy migration | SRA-206 | Done — 2026-10-14 |
+| [SRA-302](SRA-302-google-oauth-rbac-isolation.md) | Google OAuth, authenticated isolation, and RBAC | SRA-301 | Implemented; automated checks complete, real Google verification pending |
+| [SRA-303](SRA-303-desktop-oauth-authenticated-client.md) | Desktop OAuth and authenticated capture client | SRA-302 | Implemented; automated checks complete; real macOS OAuth/capture acceptance pending |
+| [SRA-304](SRA-304-api-rate-limiting.md) | Per-user and per-IP API rate limiting | SRA-302 | Implemented and verified with real loopback HTTP and substituted inference — 2026-10-14 |
+| [SRA-305](SRA-305-phase-3-integration-verification.md) | Phase 3 integration verification | SRA-303, SRA-304 | Automated verification complete; open for real Google/two-account/Keychain/physical desktop acceptance |
+
+Suggested order, and what each step gives you to run:
+
+1. **301** — upgrade a real Phase 2-shaped database without losing existing
+   ownership, then create distinct OAuth-ready users and roles.
+2. **302** — sign in through Google in a browser, use protected study routes as
+   two isolated users, and exercise a real user/admin boundary.
+3. **303 + 304** — these can proceed in parallel after SRA-302. Authenticate the
+   existing desktop capture flow through loopback/Keychain, and independently
+   add user/IP buckets before costly route work.
+4. **305** — migrate, sign in with two real accounts, capture through the real
+   desktop client, prove isolation/RBAC/rate limits, restart, and record evidence.
+
+```mermaid
+flowchart LR
+    206[SRA-206 Phase 2 verified] --> 301[SRA-301 Identity schema and migration]
+    301 --> 302[SRA-302 Google OAuth, isolation, RBAC]
+    302 --> 303[SRA-303 Desktop OAuth client]
+    302 --> 304[SRA-304 API rate limiting]
+    303 --> 305[SRA-305 Integration verification]
+    304 --> 305
+```
+
+### How the Phase 3 files work together
+
+The diagram above is implementation order. At runtime, Google login first maps
+an external identity to an existing `users` row. Later requests present the
+server-issued session or bearer credential; `require_user` resolves the trusted
+numeric ID, the rate limiter selects that user's bucket, and existing routes pass
+the ID into already scoped repositories and agents. The desktop never sends a
+numeric user ID or server/Google secret.
+
+```mermaid
+flowchart LR
+    subgraph Identity[Login and credential issuance]
+        Google[Google OAuth] --> Auth[google_oauth.py and auth routes]
+        Auth --> Users[(users table)]
+        Auth --> WebCred[Signed browser session]
+        Auth --> Code[One-use desktop completion code]
+    end
+    subgraph Desktop[macOS desktop client]
+        Browser[Loopback browser login and code exchange]
+        Browser --> Keychain[Keychain bearer credential]
+        Keychain --> Client[api_client.py]
+        Capture[Existing voice pipeline] --> Client
+    end
+    subgraph Server[FastAPI request path]
+        Guard[require_user] --> Limiter[User-keyed token bucket]
+        Limiter --> Routes[Ingest, search, chat, digest]
+        Routes --> Scoped[Existing user-scoped agents and repository]
+        Scoped --> Data[(entries and reviews)]
+        Admin[require_admin] --> Ops[Usage and rate-limit aggregates]
+    end
+    Code --> Browser
+    Client -->|Bearer credential and transcript, never user_id| Guard
+    WebCred -->|Browser cookie| Guard
+    Users --> Guard
+```
+
+| Ticket / main boundary | Input → output | Responsibility added |
+|---|---|---|
+| [301 — models/migration](SRA-301-oauth-user-schema-migration.md) | Phase 2 database → OAuth-ready schema with ownership preserved | Durable stable identity and role without unsafe legacy claiming. |
+| [302 — server auth](SRA-302-google-oauth-rbac-isolation.md) | Google callback or app credential → trusted `User` / `401` / `403` | Verify identity, issue/resolve credentials, protect routes, and enforce user/admin separation. |
+| [303 — desktop auth](SRA-303-desktop-oauth-authenticated-client.md) | Browser loopback result → Keychain credential → authenticated capture | Keep credentials local/secure and attach them to the existing one-submit HTTP flow. |
+| [304 — rate limiter](SRA-304-api-rate-limiting.md) | Trusted user or anonymous IP + request → allow or `429` | Bound work per principal before model calls/mutations and expose safe admin state. |
+| [305 — verification](SRA-305-phase-3-integration-verification.md) | Complete shared-server flow → recorded evidence | Prove migration, two-user privacy, desktop auth, RBAC, limiting, restart, and recovery. |
+
+Do not add Phase 4 quiz preferences, Phase 5 wake-up preferences, or Phase 6
+demo cleanup merely because the older `User` design lists their eventual fields.
+Phase 3's admin endpoints provide aggregate usage and limiter inspection; demo
+reset belongs to the demo/distribution phase. The rate limiter is deliberately
+single-process and must not be described as distributed enforcement.
+
+---
+
 ## Running the app
 
 ```bash

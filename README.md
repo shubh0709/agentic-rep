@@ -18,7 +18,10 @@ The project is being built incrementally, smallest working slice first:
 
 - [x] **Phase 1 — Core loop.** Single local user, no auth yet. An ingestion agent turns a pasted transcript into structured study entries, a fixed-interval scheduler (1d/3d/7d/1mo/3mo/6mo) schedules reviews, and a minimal API exposes ingest / digest / search / chat.
 - [ ] **Phase 2 — Voice capture.** Local Whisper transcription + a macOS menu-bar hotkey client, wired to Phase 1's ingest endpoint.
-- [ ] **Phase 3 — Multi-tenancy.** Google OAuth login, real per-user data isolation, RBAC (user/admin), API rate limiting.
+- [ ] **Phase 3 — Multi-tenancy.** The OAuth-ready schema, Google browser login,
+  signed web/bearer credentials, authenticated isolation, and user/admin RBAC
+  are implemented, along with desktop credentials and per-user/IP rate limiting.
+  Real Google/macOS acceptance and final Phase 3 verification remain pending.
 - [ ] **Phase 4 — Daily quiz.** MCQ generation agent, nightly pre-generation job, web quiz flow.
 - [ ] **Phase 5 — Wake-up & voice quiz.** Per-user scheduled time, spoken digest read-out, voice quiz conversation agent.
 - [ ] **Phase 6 — Open-source packaging.** Docker, docker-compose, demo mode, self-host docs.
@@ -34,7 +37,8 @@ src/sra/
     scheduler.py           compute_review_dates, schedule_reviews_for_entry [stubs]
     repository.py          create_entry, get_due_reviews, search_entries, mark_review_done [stubs]
   auth/
-    dependencies.py         get_current_user — Phase 1 placeholder (concrete; real OAuth lands in Phase 3)
+    google_oauth.py          Google identity, signed credentials, and one-use codes
+    dependencies.py         require_user / require_admin security boundary
   agents/
     schemas.py               StudyEntryDraft (concrete)
     ingestion_graph.py        LangGraph: transcript -> structured entries [stubs]
@@ -74,13 +78,147 @@ pytest -q                 # includes intentionally red Phase 2 teaching contract
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the dev workflow (lint/type-check/tests, reproducible installs, migrations) and the DB model conventions every new table should follow.
 
+### API rate limits
+
+Each app owns two synchronized, in-memory token-bucket stores. Protected traffic
+shares one bucket per server-resolved user ID: `/api/v1/entries/ingest`, `/search`,
+`/digest`, `/chat`, `/auth/me`, `/admin/usage`, and `/admin/rate-limits` (all paths
+after the first also use `/api/v1`). Authentication runs first; admin routes also
+check the role before consuming capacity. The limiter runs before model calls or
+route mutations, and one request consumes one token regardless of its token/model
+cost. Missing/invalid credentials receive `401` without creating a bucket.
+
+Anonymous auth traffic shares a separate bucket per client IP across
+`/api/v1/auth/google/login`, `/google/callback`, `/desktop/exchange`, and `/logout`
+(the last three also use `/api/v1/auth`). These routes use the IP policy even if
+a cookie or bearer header is present. A normal login needs capacity for multiple
+steps. `/api/health` and FastAPI's `/docs`, `/redoc`, and `/openapi.json` are exempt;
+there are no other static routes currently.
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `RATE_LIMIT_AUTHENTICATED_CAPACITY` | `60` | Maximum immediate requests per user |
+| `RATE_LIMIT_AUTHENTICATED_REFILL_PER_SECOND` | `1.0` | Sustained refill of 60 requests/minute |
+| `RATE_LIMIT_ANONYMOUS_CAPACITY` | `20` | Maximum immediate auth requests per IP |
+| `RATE_LIMIT_ANONYMOUS_REFILL_PER_SECOND` | `0.2` | Sustained refill of 12 requests/minute |
+| `RATE_LIMIT_IDLE_TTL_SECONDS` | `3600` | Remove inactive keys on the next request or summary |
+
+Rates are continuous refill rates, not fixed windows. For a two-request burst
+and two requests/minute sustained, use capacity `2` and refill `0.0333333333`.
+All settings must be positive and finite; idle TTL must cover each policy's
+`capacity / refill` time, so removing an idle bucket cannot restore capacity early.
+Full buckets never exceed capacity. Denied requests return
+`429 {"detail":"Rate limit exceeded"}` with `Retry-After` rounded up to whole
+seconds; concurrent requests can consume the next token before your retry. The
+desktop does not automatically resubmit ingestion after this or other failures.
+
+The limiter reads the ASGI client address and ignores forwarding headers itself.
+For direct exposure, launch Uvicorn with `--no-proxy-headers`. Behind a reverse
+proxy, use `--proxy-headers --forwarded-allow-ips=<trusted-proxy-IP>` and have the
+proxy replace incoming forwarding headers. Uvicorn defaults to trusting loopback
+proxies; never use a wildcard trust list on an exposed listener. Without trusted
+forwarding, all clients behind one proxy share its anonymous bucket. No request
+parameter, `X-Forwarded-For`, or desktop-supplied ID can select a user bucket.
+
+Admins can inspect `/api/v1/admin/rate-limits`: it returns capacities, refill
+rates, and active-bucket counts, with no raw IPs, identities, credentials, or study
+content. This route uses the admin's normal user bucket. Wait `Retry-After` if it
+is exhausted. Restart after configuration changes. Each worker/instance has
+independent buckets, and restart clears state; **run one worker** for this policy.
+This is not a distributed or infrastructure-level denial-of-service defense.
+A future Redis-backed atomic store can replace `TokenBucketLimiter` behind the
+same consume/summary dependency boundary; Redis is not implemented.
+
+### Upgrade an existing database for OAuth
+
+Before upgrading a Phase 2 database, stop the application and copy the database
+file to a safe backup. Point `DATABASE_URL` at the database (or a disposable
+copy first), then run:
+
+```bash
+alembic upgrade head
+```
+
+The migration keeps every user ID, study-entry owner, review schedule, and
+timestamp. Existing users receive the ordinary `user` role and retain a NULL
+`google_sub`; NULL is the intentional intermediate state for pre-OAuth data,
+not the final invariant for OAuth-created users. A visitor cannot claim this
+row: SRA-302's verified login path keys users only by Google's stable subject
+and will not automatically attach an unlinked local row.
+
+To retain legacy data under a known identity, first obtain and independently
+verify that account's Google subject, back up the database, and explicitly link
+the numeric legacy user selected by the operator:
+
+```bash
+python -m sra.db.legacy_identity --user-id 1 --google-sub 'verified-google-subject'
+```
+
+The command refuses blank subjects, missing users, already-linked users, and a
+subject already used by another row. It changes only `users.google_sub`; the
+numeric user ID and all ownership remain unchanged. Run it before that Google
+account's first application login. If the identity cannot be verified, leave
+the row unlinked and export or archive the backed-up database instead of
+guessing. Recovery is to stop the app and restore the backup. Downgrading with
+`alembic downgrade 067a64508521` preserves users, entries, and reviews but
+irreversibly removes Google subjects, roles, and last-login timestamps.
+
 The implemented Phase 1 API can already run:
 
 ```bash
-uvicorn sra.api.app:create_app --factory --reload
+uvicorn sra.api.app:create_app --factory --reload --no-access-log
 ```
 
-Then `POST /api/v1/entries/ingest {"transcript": "..."}`, `GET /api/v1/digest`, `GET /api/v1/search?q=...`, `POST /api/v1/chat {"question": "..."}`.
+Then sign in before calling `POST /api/v1/entries/ingest`, `GET /api/v1/digest`,
+`GET /api/v1/search`, or `POST /api/v1/chat`; anonymous requests now return
+`401`.
+
+### Configure Google sign-in
+
+Create a Google OAuth web client and register the exact value of
+`GOOGLE_CALLBACK_URL` as an authorized redirect URI. Copy `.env.example`, set
+`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and a high-entropy
+`AUTH_SIGNING_SECRET`, then start the server and visit:
+
+```text
+http://127.0.0.1:8000/api/v1/auth/google/login
+```
+
+After Google redirects back, the server verifies the ID token, upserts by the
+stable Google subject, and sets an HTTP-only SameSite session cookie. Use
+`GET /api/v1/auth/me` to inspect the safe account shape and
+`POST /api/v1/auth/logout` to clear the browser cookie. Provider tokens and
+authorization codes are neither returned nor stored in that cookie.
+The initiating browser also receives a short-lived HttpOnly login cookie;
+callbacks from another browser are rejected before provider exchange. Start a
+fresh login after a failed attempt. Disable access logging as shown above and
+configure reverse proxies/tracing to omit auth query strings, cookies, and
+Authorization headers: OAuth callback URLs contain short-lived secrets.
+
+Local HTTP development may use `AUTH_COOKIE_SECURE=false` only with a localhost
+callback. Deployed callbacks must use HTTPS and `AUTH_COOKIE_SECURE=true`.
+OAuth state, desktop completion codes, and application credentials expire;
+completion codes are one-use. Application credentials are stateless, so logout
+clears the browser copy but cannot revoke an already stolen credential before
+its configured expiry. Rotating `AUTH_SIGNING_SECRET` invalidates every current
+session and bearer credential; restart all server processes after rotation.
+OAuth state and desktop completion replay records are in process memory, so the
+current self-hosted deployment must use one API process (or sticky routing).
+
+To promote an already verified account, stop application traffic, back up the
+database, and update only that known user's role through an operator-controlled
+SQL session. Never accept a role or numeric user ID from an API request:
+
+```sql
+UPDATE users SET role = 'admin' WHERE google_sub = 'verified-google-subject';
+```
+
+Ordinary users receive `403` from `GET /api/v1/admin/usage`; admins receive only
+aggregate counts. For callback failures, confirm the redirect URI matches
+exactly, the server clock is correct, and all three secrets are present. Restore
+configuration and start a new login attempt—failed or consumed state cannot be
+reused. The default automated suite substitutes Google; a real-Google check is
+manual and should use disposable test accounts and a disposable database.
 
 ## Submit a typed note from Python
 
@@ -93,8 +231,8 @@ pip install -e '.[dev,capture]'
 The client reads `API_BASE_URL` from the environment or `.env`, defaulting to
 `http://127.0.0.1:8000`. Use the server origin or deployment prefix without
 `/api/v1`; a trailing slash is accepted. The client needs no OpenAI, LangSmith,
-database, or OAuth credentials. The running server owns model calls and resolves
-the local user.
+database, or OAuth secrets. Desktop sign-in stores only the server-issued
+application credential in Keychain and supplies it to capture requests.
 
 ```python
 import httpx
@@ -228,6 +366,41 @@ export WHISPER_MODEL_SIZE='base'
 python3 -m sra.capture.menubar_app
 ```
 
+The protected Phase 3 server requires desktop sign-in. Choose **Sign in** from
+the menu-bar app, complete Google consent in the system browser, and return to
+the app after the browser reports success. The temporary callback listens only
+on `127.0.0.1` and closes after one callback or after
+`DESKTOP_LOGIN_TIMEOUT_SECONDS` (120 seconds by default). The short-lived code
+is exchanged directly with `API_BASE_URL`; the application credential is never
+placed in the callback URL.
+Each desktop attempt supplies its own random binding, carried in the signed
+server state and checked locally before exchange. **Cancel sign-in** and **Quit**
+interrupt the local wait, including an incomplete callback connection. The
+listener enforces an absolute deadline; exchange/account HTTP operations use
+15-second network timeouts and check cancellation before storing a credential.
+An already active native browser/Keychain prompt still belongs to macOS.
+
+The resulting application credential is stored in macOS Keychain under a
+service derived from `KEYCHAIN_SERVICE_PREFIX` and the normalized server origin,
+with the Google subject as its account. This prevents a localhost credential
+from being sent to another deployment. Keychain may show a normal access prompt
+on first use. **Sign out** removes only the current server/account credential.
+You can also remove it in Keychain Access by searching for the configured
+service prefix. Never copy the credential into `.env` or command-line options.
+After restarting the app, choose **Use saved sign-in** to validate and reuse the
+last credential for this server without opening Google again.
+The adapter selects the native macOS Keychain backend explicitly, independent
+of global keyring configuration. Removing an inactive account preserves another
+account's active selection. Restart tests recreate the adapter against a fake
+secure backend; real Keychain persistence still requires manual acceptance.
+
+An expired or rejected credential produces a “sign in again” error and is
+removed from the selected storage entry when loaded and validated (the active
+selector and named account are separate Keychain entries). A failed authenticated ingestion is
+not replayed automatically: even after signing in again, check search before
+making an explicit new submission because the original POST outcome may be
+uncertain.
+
 Choose a shortcut that does not conflict with another app. Shortcuts require at
 least one of `ctrl`, `alt`/`option`, `shift`, or `cmd`/`command`, plus a letter,
 number, F1–F12, Space, Tab, Enter, or Escape. Malformed or unsupported shortcuts
@@ -267,7 +440,9 @@ transcription is requested; first use may download model weights, which later
 runs reuse from the local cache. The `desktop` extra adds macOS microphone and
 menu-bar dependencies. Client settings are `API_BASE_URL` (default
 `http://127.0.0.1:8000`, without `/api/v1`), `WHISPER_MODEL_SIZE` (`base`), and
-`HOTKEY_COMBO` (`<ctrl>+<alt>+r`). The client needs no server credentials.
+`HOTKEY_COMBO` (`<ctrl>+<alt>+r`), `DESKTOP_LOGIN_TIMEOUT_SECONDS` (`120`), and
+`KEYCHAIN_SERVICE_PREFIX` (`com.spaced-repetition-agent.desktop`). The client
+needs no Google client secret or application signing secret.
 The menu-bar launch and exact hotkey registration are covered by SRA-205. Real
 microphone and desktop acceptance remain manual checks; see each ticket’s
 verification record.

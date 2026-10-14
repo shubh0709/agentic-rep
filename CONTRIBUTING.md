@@ -40,6 +40,23 @@ inference is opt-in, and physical microphone/global-hotkey acceptance remains
 part of SRA-206 verification. Do not hide unfinished behavior with `xfail` or
 assertions expecting `NotImplementedError`.
 
+SRA-301 through SRA-304 are implemented. Run the full suite for regressions;
+`pytest -m phase3 -q` isolates auth, desktop credentials, and rate limiting.
+Real Google/Keychain and physical desktop acceptance remain part of SRA-305.
+Phase 3 tests must fail at the named learning stub or behavior assertion, never
+because Google, Keychain, a browser, hardware, or an import is unavailable.
+
+Rate-limit tests use `create_app(rate_limit_clock=fake_clock)` and fresh app state,
+never sleep for tokens. After changing environment variables in a test, call
+`get_settings.cache_clear()` **before** constructing the app; an existing app keeps
+its original limiter policy. `app.state.rate_limits.reset()` explicitly resets
+both stores, and lifespan shutdown clears them. Cleanup on requests/summaries
+expires idle keys; TTL must cover the full refill time. Run
+`pytest tests/unit/test_rate_limit.py tests/integration/test_rate_limited_routes.py -q`
+for math, concurrency, configuration, HTTP ordering, RBAC, and redaction coverage.
+See [API rate limits](README.md#api-rate-limits) for units, tuning, proxy trust,
+single-worker/restart limitations, and the proposed Redis replacement seam.
+
 ## Reproducible installs
 
 `pyproject.toml` declares dependencies as ranges (`fastapi>=0.115`, etc.), so

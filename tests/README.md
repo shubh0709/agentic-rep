@@ -1,4 +1,54 @@
-# Phase 2 test-first learning guide
+# Test-first learning guide
+
+## Phase 3: authentication and multi-tenancy
+
+Phase 3 started with executable contracts. SRA-301 through SRA-304 are now
+implemented and their automated checks pass. Default tests do not contact Google, open a browser, touch Keychain, wait
+for a real clock, or use the microphone.
+
+```bash
+source .venv/bin/activate
+pytest tests/unit/test_user_model.py -v
+pytest tests/unit/test_auth.py -v
+pytest tests/integration/test_authenticated_routes.py -v
+pytest tests/unit/test_auth_client.py tests/unit/test_api_client.py -m phase3 -v
+pytest tests/unit/test_rate_limit.py -v
+pytest tests/integration/test_rate_limited_routes.py -v
+pytest tests/e2e/test_authenticated_capture_e2e.py -v
+pytest tests/integration/test_route_policy_audit.py -v
+```
+
+The intended red-to-green order is:
+
+1. SRA-301: make `test_user_model.py` green, then add and rehearse the Alembic
+   migration against the actual Phase 2 revision.
+2. SRA-302: implement provider verification, identity upsert, application
+   credentials, completion codes, and protected route/RBAC integration.
+3. SRA-303: implement desktop loopback and secure-storage behavior, then add the
+   bearer header without changing the one-POST uncertainty contract.
+4. SRA-304: implement deterministic, synchronized token buckets, then wire them
+   ahead of route side effects.
+5. Run the authenticated capture E2E test after each server/client wiring step;
+   it keeps the graph, repository, schedules, and SQLite storage real.
+
+Use `pytest -m 'not phase3' -q` while working one red contract at a time. Phase 3
+is not complete until the full suite, migration rehearsals, route integration
+tests, lint, type checking, and the manual evidence in SRA-305 all pass. A
+passing default/offline suite is not evidence of real Google, Keychain, or
+multi-process rate-limit behavior.
+
+SRA-305 verification on 2026-10-14: default suite **386 passed, 9 opt-in skips**;
+cached-Whisper `make test-data` **394 passed, 1 live-provider deselected**;
+Phase 3 alone **112 passed, 283 deselected**. Ruff/Pyright passed. Real localhost
+tests cover callback nonce binding, incomplete-header deadline/cancellation and
+port/thread cleanup; route inventory rejects unreviewed mounted endpoints.
+The secure-storage tests use a fake backend (including adapter recreation), and
+native menu tests substitute Cocoa. The real-audio HTTP harness now uses signed
+test credentials and an isolated OAuth-shaped owner, preserving auth guards
+through application/engine/server recreation. No real Google, Keychain or
+physical desktop acceptance is implied; see SRA-305 for the outstanding record.
+
+## Phase 2 voice capture
 
 ## Two complete verification commands
 

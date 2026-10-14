@@ -111,11 +111,17 @@ Ingestion agent + scheduler + minimal API, exercised via pasted transcript text 
 - [ ] [SRA-205](tickets/SRA-205-menubar-hotkey-capture.md) — `src/sra/capture/menubar_app.py`: implemented hotkey/UI around the recorder and pipeline; physical desktop/search acceptance pending
 - [ ] [SRA-206](tickets/SRA-206-phase-2-integration-verification.md) — automated regression checks plus real desktop-to-digest verification
 
-Phase 2 retains Phase 1's single local user and server-side OpenAI agents. Only transcript text is submitted; raw audio stays local. Authentication remains Phase 3, and wake-up/TTS/voice quiz remain Phase 5. The scaffold and tests now exist; runtime behavior and manual verification remain incomplete.
+Phase 2 retains server-side OpenAI agents and sends only transcript text; raw
+audio stays local. SRA-303 now authenticates that flow with the server-issued
+application credential. Wake-up/TTS/voice quiz remain Phase 5.
 
 ## Phase 3 — Multi-tenancy, auth, RBAC, rate limiting
 
-- [ ] Not started. Extend `User` model (role, OAuth fields), `src/sra/auth/google_oauth.py`, replace Phase 1's placeholder `get_current_user` with real `require_user`/`require_admin`, `src/sra/api/rate_limit.py`, `src/sra/client/auth_client.py`.
+- [x] [SRA-301](tickets/SRA-301-oauth-user-schema-migration.md) — OAuth identity fields, least-privilege role constraints, safe Phase 2 upgrade/downgrade rehearsal, and explicit operator-controlled legacy linking implemented on 2026-10-14.
+- [x] [SRA-302](tickets/SRA-302-google-oauth-rbac-isolation.md) — Google browser login, verified identity upsert, signed cookie/bearer credentials, one-use desktop completion codes, protected study routes, two-user isolation, and user/admin RBAC implemented on 2026-10-14. Automated checks pass; real-Google verification remains pending.
+- [ ] [SRA-303](tickets/SRA-303-desktop-oauth-authenticated-client.md) — localhost-only one-use browser completion, direct credential exchange, `/auth/me` validation, per-origin/account Keychain storage, bearer-authenticated capture, nonblocking menu actions, and one-POST failure semantics implemented on 2026-10-14. Focused unit/e2e and Phase 1/2 regressions pass; the real browser/Keychain and physical desktop evidence remains pending.
+- [x] [SRA-304](tickets/SRA-304-api-rate-limiting.md) — synchronized app-owned user/IP token buckets, validated policy, trusted identity/address keys, pre-work `429` with `Retry-After`, health exemption, cleanup/reset, and admin aggregate inspection implemented on 2026-10-14. **34 focused tests and 363 full-suite tests passed (10 opt-in/platform skips); Ruff and Pyright passed.** A disposable single-worker Uvicorn/SQLite smoke run over real loopback HTTP observed user A `201, 201, 429`, independent user B `200`, anonymous `302, 302, 429`, refill/search/recovery and admin/user `200`/`403`. Inference was substituted, credentials locally issued, and the monotonic clock controlled; no real Google/Keychain/hardware or distributed-limit evidence is implied.
+- [ ] [SRA-305](tickets/SRA-305-phase-3-integration-verification.md) — automated verification performed 2026-10-14: **386 passed, 9 opt-in skips**; **112 Phase 3 tests passed**; cached real-Whisper `make test-data` **394 passed, 1 live-provider deselected**; Ruff/Pyright/whitespace passed. Fixed browser/desktop attempt binding, atomic OAuth replay consumption, cancellation/deadline cleanup, native Keychain selection/account isolation, credential-error redaction, and the unauthenticated opt-in audio harness. Added mounted-route policy audit and persisted-credential voice/chat/digest/restart coverage. Phase remains open for two real Google accounts, native Keychain and physical desktop acceptance; Phase 4 is blocked.
 
 ## Phase 4 — Daily MCQ quiz (web)
 
