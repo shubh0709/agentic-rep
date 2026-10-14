@@ -272,3 +272,19 @@ def list_today_quiz_sets(user_id: int, today: date, session: Session) -> list[Qu
     return list(session.exec(statement).all())
 
 
+def has_quiz_set_for_entry_today(user_id: int, entry_id: int, today: date, session: Session) -> bool:
+    """
+    Return True when this user already has a QuizSet for (entry_id, today).
+
+    Intended for the SRA-403 nightly pregeneration job to skip entries that
+    are already covered; the unique constraint on
+    ``(entry_id, generated_on)`` is the authoritative guard, but a precheck
+    lets the job skip work without a wasted INSERT.
+    """
+
+    statement = select(QuizSet.id).where(
+        QuizSet.user_id == user_id,  # pyright: ignore[reportArgumentType]
+        QuizSet.entry_id == entry_id,  # pyright: ignore[reportArgumentType]
+        QuizSet.generated_on == today,  # pyright: ignore[reportArgumentType]
+    )
+    return session.exec(statement).first() is not None
