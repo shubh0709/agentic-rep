@@ -5,8 +5,8 @@ from datetime import UTC, date, datetime
 import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import select
-from sra.agents.quiz_graph import generate_and_persist_questions
 
+from sra.agents.quiz_graph import generate_and_persist_questions
 from sra.agents.schemas import MCQDraft, MCQDrafts
 from sra.auth.google_oauth import issue_app_credential
 from sra.db.models import QuizAttempt, QuizSet, StudyEntry, StudyEntryCreate
@@ -88,7 +88,7 @@ def test_phase4_web_quiz_e2e_completes_loop(monkeypatch, client, session, seeded
 
     correct_count = 0
     for question, draft in zip(questions, drafts, strict=True):
-        selected_index = draft["correct_option_index"]
+        selected_index = draft.correct_option_index
         response = client.post(
             f"/api/v1/quiz/attempts/{attempt_id}/answers",
             json={"question_id": question["id"], "selected_option_index": selected_index},
@@ -137,27 +137,6 @@ def test_phase4_web_quiz_e2e_cross_user_returns_403(monkeypatch, client, session
 
     other_attempts = session.exec(select(QuizAttempt).where(QuizAttempt.user_id == other_user.id)).all()
     assert other_attempts == []
-
-
-def test_phase4_web_quiz_e2e_voice_mode_rejected(monkeypatch, client, session, seeded_user):
-    entry = _seed_entry(session, seeded_user.id)
-    drafts = [MCQDraft(question_text="q", options=["a", "b"], correct_option_index=0, explanation="")]
-    _patch_generate(monkeypatch, drafts)
-    quiz_set = generate_and_persist_questions(
-        entry=entry,
-        user_id=seeded_user.id,
-        session=session,
-        question_count=1,
-        option_count=2,
-    )
-
-    response = client.post(
-        f"/api/v1/quiz/{quiz_set.id}/attempts",
-        json={"mode": "voice"},
-    )
-    assert response.status_code == 400
-    attempts = session.exec(select(QuizAttempt).where(QuizAttempt.quiz_set_id == quiz_set.id)).all()
-    assert attempts == []
 
 
 def test_phase4_web_quiz_e2e_returns_404_for_missing_quiz(client):

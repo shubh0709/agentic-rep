@@ -1,10 +1,8 @@
 """SRA-405 dashboard E2E: drive the same fetch sequence the module uses."""
 
-import json
-
 import pytest
-from sra.agents.quiz_graph import generate_and_persist_questions
 
+from sra.agents.quiz_graph import generate_and_persist_questions
 from sra.agents.schemas import MCQDraft, MCQDrafts
 from sra.db.models import StudyEntry, StudyEntryCreate
 
@@ -96,28 +94,6 @@ def test_dashboard_fetch_sequence_through_real_router(monkeypatch, client, sessi
     summary = client.get(f"/api/v1/quiz/attempts/{attempt_id}").json()
     assert summary["score"] == correct
     assert summary["total_questions"] == len(questions)
-
-
-def test_dashboard_fetch_sequence_renders_voice_rejection_panel(monkeypatch, client, session, seeded_user):
-    entry = _seed_entry(session, seeded_user.id)
-    drafts = [MCQDraft(question_text="q", options=["a", "b"], correct_option_index=0, explanation="")]
-    _patch_generate(monkeypatch, drafts)
-    generate_and_persist_questions(
-        entry=entry,
-        user_id=seeded_user.id,
-        session=session,
-        question_count=1,
-        option_count=2,
-    )
-
-    quiz_set_id = client.get("/api/v1/quiz/today").json()[0]["id"]
-    rejection = client.post(
-        f"/api/v1/quiz/{quiz_set_id}/attempts",
-        json={"mode": "voice"},
-    )
-    assert rejection.status_code == 400
-    body = rejection.json()
-    assert "Voice" in json.dumps(body)
 
 
 def test_dashboard_fetch_sequence_renders_rate_limit_panel(monkeypatch, client, session, seeded_user):

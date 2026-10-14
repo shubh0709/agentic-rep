@@ -69,6 +69,26 @@ class AnswerResult(BaseModel):
     explanation: str | None
 
 
+class VoiceTurnRequest(BaseModel):
+    answer_text: str
+
+    @field_validator("answer_text")
+    @classmethod
+    def _strip_and_require(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("answer_text must not be empty")
+        return stripped
+
+
+class VoiceTurnResponse(BaseModel):
+    is_correct: bool | None
+    feedback_text: str
+    next_question_text: str | None
+    finished: bool
+    score: int | None
+
+
 class QuizAttemptOut(BaseModel):
     id: int
     quiz_set_id: int

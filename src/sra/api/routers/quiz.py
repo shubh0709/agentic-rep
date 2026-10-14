@@ -3,6 +3,11 @@ from datetime import date
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 
+from sra.agents.quiz_conversation_graph import (
+    QuizAttemptAlreadyCompletedError,
+    QuizVoiceInterpretationError,
+    process_voice_turn,
+)
 from sra.api.deps import get_session, require_user
 from sra.api.schemas import (
     AnswerResult,
@@ -12,6 +17,8 @@ from sra.api.schemas import (
     QuizSetOut,
     StartAttemptRequest,
     SubmitAnswerRequest,
+    VoiceTurnRequest,
+    VoiceTurnResponse,
 )
 from sra.db.models import (
     QuizAnswer,
@@ -24,6 +31,7 @@ from sra.db.models import (
 )
 from sra.db.repository import (
     complete_quiz_attempt,
+    get_quiz_questions,
     list_today_quiz_sets,
     save_quiz_answer,
 )
@@ -52,6 +60,7 @@ def _get_owned_attempt(session: Session, user_id: int, attempt_id: int) -> QuizA
 
 
 def _entry_to_entry_out(entry: StudyEntry) -> EntryOut:
+    assert entry.id is not None
     return EntryOut(
         id=entry.id,
         topic=entry.topic,
@@ -63,6 +72,7 @@ def _entry_to_entry_out(entry: StudyEntry) -> EntryOut:
 
 
 def _question_to_out(question: QuizQuestion) -> QuizQuestionOut:
+    assert question.id is not None
     return QuizQuestionOut(
         id=question.id,
         question_text=question.question_text,
@@ -72,11 +82,12 @@ def _question_to_out(question: QuizQuestion) -> QuizQuestionOut:
 
 
 def _build_quiz_set_out(session: Session, quiz_set: QuizSet) -> QuizSetOut:
+    assert quiz_set.id is not None
     questions = list(
         session.exec(
             select(QuizQuestion)
             .where(QuizQuestion.quiz_set_id == quiz_set.id)
-            .order_by(QuizQuestion.order_index)
+            .order_by(QuizQuestion.order_index)  # pyright: ignore[reportArgumentType]
         )
     )
     entry = session.get(StudyEntry, quiz_set.entry_id)
@@ -122,8 +133,7 @@ def start_quiz_attempt(
 ) -> dict[str, object]:
     assert user.id is not None
     quiz_set = _get_owned_quiz_set(session, user.id, quiz_set_id)
-    if body.mode == "voice":
-        raise HTTPException(status_code=400, detail=VOICE_UNSUPPORTED)
+    assert quiz_set.id is not None
     attempt = QuizAttempt.model_validate(
         QuizAttemptCreate(
             quiz_set_id=quiz_set.id,
@@ -136,6 +146,14 @@ def start_quiz_attempt(
     session.commit()
     session.refresh(attempt)
     assert attempt.id is not None
+    if body.mode == "voice":
+        questions = get_quiz_questions(quiz_set.id, session)
+        first_question = questions[0]
+        return {
+            "attempt_id": attempt.id,
+            "question_text": first_question.question_text,
+            "options": list(first_question.options),
+        }
     return {"attempt_id": attempt.id, "question_text": None}
 
 
@@ -175,6 +193,36 @@ def submit_quiz_answer(
     )
 
 
+@router.post("/attempts/{attempt_id}/voice-turn", response_model=VoiceTurnResponse)
+def voice_turn(
+    attempt_id: int,
+    body: VoiceTurnRequest,
+    user: User = Depends(require_user),
+    session: Session = Depends(get_session),
+) -> VoiceTurnResponse:
+    assert user.id is not None
+    attempt = _get_owned_attempt(session, user.id, attempt_id)
+    if attempt.mode != "voice":
+        raise HTTPException(status_code=400, detail=VOICE_UNSUPPORTED)
+    if attempt.completed_at is not None:
+        raise HTTPException(status_code=409, detail="Attempt already completed")
+    try:
+        result = process_voice_turn(
+            session=session, attempt=attempt, answer_text=body.answer_text
+        )
+    except QuizAttemptAlreadyCompletedError as exc:
+        raise HTTPException(status_code=409, detail="Attempt already completed") from exc
+    except QuizVoiceInterpretationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return VoiceTurnResponse(
+        is_correct=result["is_correct"],
+        feedback_text=result["feedback_text"],
+        next_question_text=result["next_question_text"],
+        finished=result["finished"],
+        score=result["score"],
+    )
+
+
 @router.post("/attempts/{attempt_id}/complete")
 def complete_quiz_attempt_route(
     attempt_id: int,
@@ -204,6 +252,7 @@ def get_quiz_attempt(
 ) -> QuizAttemptOut:
     assert user.id is not None
     attempt = _get_owned_attempt(session, user.id, attempt_id)
+    assert attempt.id is not None
     return QuizAttemptOut(
         id=attempt.id,
         quiz_set_id=attempt.quiz_set_id,

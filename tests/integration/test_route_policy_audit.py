@@ -26,6 +26,7 @@ def test_every_mounted_route_has_an_explicit_authentication_and_limit_policy(cli
         ("GET", "/api/v1/quiz/{quiz_set_id}"): "user",
         ("POST", "/api/v1/quiz/{quiz_set_id}/attempts"): "user",
         ("POST", "/api/v1/quiz/attempts/{attempt_id}/answers"): "user",
+        ("POST", "/api/v1/quiz/attempts/{attempt_id}/voice-turn"): "user",
         ("POST", "/api/v1/quiz/attempts/{attempt_id}/complete"): "user",
         ("GET", "/api/v1/quiz/attempts/{attempt_id}"): "user",
         ("GET", "/api/v1/me/preferences"): "user",
