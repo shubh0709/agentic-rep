@@ -1,12 +1,18 @@
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
+from time import monotonic
+
 from fastapi import FastAPI
 
+from sra.api.rate_limit import RateLimitState
 from sra.api.routers import api_router
+from sra.config import get_settings
 from sra.db.session import init_db
 
 API_V1_PREFIX = "/api/v1"
 
 
-def create_app() -> FastAPI:
+def create_app(*, rate_limit_clock: Callable[[], float] = monotonic) -> FastAPI:
     """
     Build and return the FastAPI app.
 
@@ -30,7 +36,22 @@ def create_app() -> FastAPI:
     `sra.api.app.init_db` directly rather than touching the real DB file).
     """
 
+    limits = RateLimitState.from_settings(get_settings(), rate_limit_clock)
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        try:
+            yield
+        finally:
+            limits.reset()
+
     init_db()
-    app = FastAPI(title="Spaced Repetition Agent")
+    app = FastAPI(title="Spaced Repetition Agent", lifespan=lifespan)
+    app.state.rate_limits = limits
     app.include_router(api_router, prefix=API_V1_PREFIX)
+
+    @app.get("/api/health", tags=["health"])
+    def health() -> dict[str, str]:
+        return {"status": "ok"}
+
     return app

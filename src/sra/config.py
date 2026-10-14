@@ -4,7 +4,7 @@ from functools import lru_cache
 from typing import Literal, Self
 from urllib.parse import urlsplit
 
-from pydantic import SecretStr, field_validator, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -40,6 +40,21 @@ class Settings(BaseSettings):
     auth_cookie_secure: bool = False
     auth_cookie_samesite: Literal["lax", "strict"] = "lax"
     auth_web_redirect_url: str = "/"
+    rate_limit_authenticated_capacity: int = Field(default=60, gt=0)
+    rate_limit_authenticated_refill_per_second: float = Field(default=1.0, gt=0, allow_inf_nan=False)
+    rate_limit_anonymous_capacity: int = Field(default=20, gt=0)
+    rate_limit_anonymous_refill_per_second: float = Field(default=0.2, gt=0, allow_inf_nan=False)
+    rate_limit_idle_ttl_seconds: float = Field(default=3600, gt=0, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def validate_rate_limit_ttl(self) -> Self:
+        full_refill_time = max(
+            self.rate_limit_authenticated_capacity / self.rate_limit_authenticated_refill_per_second,
+            self.rate_limit_anonymous_capacity / self.rate_limit_anonymous_refill_per_second,
+        )
+        if self.rate_limit_idle_ttl_seconds < full_refill_time:
+            raise ValueError("RATE_LIMIT_IDLE_TTL_SECONDS must be at least each bucket's full refill time")
+        return self
 
     @field_validator("google_callback_url")
     @classmethod
