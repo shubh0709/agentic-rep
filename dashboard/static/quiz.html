@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quiz Dashboard</title>
+<style>
+  #quiz-root {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-width: 720px;
+    margin: 16px auto;
+    padding: 16px;
+    font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+    color: #1a1a1a;
+  }
+  #quiz-root > * { display: block; }
+  #quiz-root h2 { margin: 0; font-size: 1.1rem; }
+  #quiz-root [data-panel="status"] {
+    border: 1px solid #ccc;
+    padding: 12px;
+    background: #fafafa;
+  }
+  #quiz-root [data-panel="today-list"] {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+  #quiz-root [data-panel="today-list"] > li {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px;
+    border-bottom: 1px solid #eee;
+  }
+  #quiz-root button {
+    padding: 4px 10px;
+    cursor: pointer;
+  }
+</style>
+</head>
+<body>
+<div id="quiz-root"></div>
+<script>
+  (function () {
+    function boot() {
+      if (typeof window.initQuiz === "function") {
+        window.initQuiz(document.getElementById("quiz-root"), document);
+        return true;
+      }
+      return false;
+    }
+    if (!boot()) {
+      var tries = 0;
+      var interval = setInterval(function () {
+        if (boot() || ++tries > 50) clearInterval(interval);
+      }, 20);
+    }
+  })();
+</script>
+<script type="module" src="quiz.js"></script>
+</body>
+</html>
