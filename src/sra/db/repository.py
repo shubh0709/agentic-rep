@@ -288,3 +288,67 @@ def has_quiz_set_for_entry_today(user_id: int, entry_id: int, today: date, sessi
         QuizSet.generated_on == today,  # pyright: ignore[reportArgumentType]
     )
     return session.exec(statement).first() is not None
+
+
+def save_quiz_answer(
+    *,
+    attempt: QuizAttempt,
+    question: QuizQuestion,
+    selected_option_index: int,
+    is_correct: bool,
+    session: Session,
+) -> QuizAnswer:
+    """
+    Persist a QuizAnswer for one (attempt, question) pair, stamping
+    answered_at to _utcnow(). The unique (attempt_id, question_id)
+    constraint enforces one answer per question per attempt; a duplicate
+    surfaces as a typed ValueError rather than a raw SQLAlchemy error.
+    """
+
+    answer = QuizAnswer.model_validate(
+        QuizAnswerCreate(
+            attempt_id=attempt.id if attempt.id is not None else 0,
+            question_id=question.id if question.id is not None else 0,
+            selected_option_index=selected_option_index,
+            is_correct=is_correct,
+        )
+    )
+    session.add(answer)
+    try:
+        session.commit()
+    except IntegrityError as exc:
+        session.rollback()
+        raise ValueError(
+            f"answer for attempt_id={attempt.id} question_id={question.id} already exists"
+        ) from exc
+    session.refresh(answer)
+    return answer
+
+
+def complete_quiz_attempt(*, attempt: QuizAttempt, score: int, session: Session) -> QuizAttempt:
+    """
+    Stamp `attempt.completed_at` to a timezone-aware UTC now and persist
+    `score`. Caller is responsible for the attempt already being a fresh,
+    saved row (typical caller is the dashboard which just inserted it).
+    """
+
+    attempt.completed_at = _utcnow()
+    attempt.score = score
+
+    session.add(attempt)
+    session.commit()
+    session.refresh(attempt)
+    return attempt
+
+
+def get_quiz_attempt(user_id: int, attempt_id: int, session: Session) -> QuizAttempt | None:
+    """
+    Fetch a QuizAttempt by id, scoped to user_id. Returns None when the
+    attempt does not exist or belongs to another user.
+    """
+
+    statement = select(QuizAttempt).where(
+        QuizAttempt.id == attempt_id,  # pyright: ignore[reportArgumentType]
+        QuizAttempt.user_id == user_id,  # pyright: ignore[reportArgumentType]
+    )
+    return session.exec(statement).first()

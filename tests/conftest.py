@@ -75,7 +75,7 @@ def client(monkeypatch, session):
     from sra.db.session import get_session
 
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-    monkeypatch.setenv("AUTH_SIGNING_SECRET", "test-suite-auth-signing-secret-with-entropy")
+    monkeypatch.setenv("AUTH_SIGNING_SECRET", "rate-limit-test-signing-secret-with-entropy")
     monkeypatch.setattr("sra.api.app.init_db", lambda: None)
     get_settings.cache_clear()
 
@@ -88,7 +88,7 @@ def client(monkeypatch, session):
     assert user.id is not None
     credential = issue_app_credential(
         user.id,
-        signing_secret="test-suite-auth-signing-secret-with-entropy",
+        signing_secret="rate-limit-test-signing-secret-with-entropy",
         ttl_seconds=3600,
         now=datetime.now(UTC),
     )
