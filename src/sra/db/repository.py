@@ -7,9 +7,23 @@ nothing to establish now while there's only one local user.
 
 from datetime import UTC, date, datetime, time
 
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, String, cast, or_, select
 
-from sra.db.models import ReviewSchedule, StudyEntry, StudyEntryCreate
+from sra.agents.schemas import MCQDraft
+from sra.db.models import (
+    QuizAnswer,
+    QuizAnswerCreate,
+    QuizAttempt,
+    QuizQuestion,
+    QuizQuestionCreate,
+    QuizSet,
+    QuizSetCreate,
+    ReviewSchedule,
+    StudyEntry,
+    StudyEntryCreate,
+    _utcnow,
+)
 from sra.db.scheduler import schedule_reviews_for_entry
 
 
@@ -144,3 +158,117 @@ def mark_review_done(user_id: int, review_id: int, status: str, session: Session
     session.refresh(review)
 
     return review
+
+
+def create_quiz_set(
+    *,
+    entry: StudyEntry,
+    user_id: int,
+    session: Session,
+    generated_on: date,
+    question_count: int,
+    option_count: int,
+    drafts: list[MCQDraft],
+) -> QuizSet:
+    """
+    Insert a QuizSet scoped to user_id along with one QuizQuestion row per
+    draft, all in one transaction.
+
+    Server-owned fields (user_id, entry_id, generated_on, snapshot counts) are
+    applied via `model_validate(QuizSetCreate(entry_id=entry.id),
+    update={...})` so a caller can never override them through the Create
+    schema. The `(entry_id, generated_on)` unique constraint makes the nightly
+    pregeneration idempotent -- a duplicate call surfaces as a typed
+    ValueError rather than a raw SQLAlchemy IntegrityError.
+    """
+
+    quiz_set = QuizSet.model_validate(
+        QuizSetCreate(entry_id=entry.id),
+        update={
+            "user_id": user_id,
+            "entry_id": entry.id,
+            "question_count": question_count,
+            "option_count": option_count,
+            "generated_on": generated_on,
+        },
+    )
+    session.add(quiz_set)
+
+    try:
+        session.flush()
+    except IntegrityError as exc:
+        session.rollback()
+        raise ValueError(
+            f"quiz_set for entry_id={entry.id} on generated_on={generated_on} already exists"
+        ) from exc
+
+    assert quiz_set.id is not None
+
+    for order_index, draft in enumerate(drafts):
+        question = QuizQuestion.model_validate(
+            QuizQuestionCreate(
+                quiz_set_id=quiz_set.id,
+                question_text=draft.question_text,
+                options=list(draft.options),
+                correct_option_index=draft.correct_option_index,
+                explanation=draft.explanation,
+                order_index=order_index,
+            )
+        )
+        session.add(question)
+
+    try:
+        session.commit()
+    except IntegrityError as exc:
+        session.rollback()
+        raise ValueError(
+            f"quiz_questions for quiz_set_id={quiz_set.id} violated a constraint"
+        ) from exc
+
+    session.refresh(quiz_set)
+    question_rows = list(
+        session.exec(
+            select(QuizQuestion)
+            .where(QuizQuestion.quiz_set_id == quiz_set.id)
+            .order_by(QuizQuestion.order_index)  # pyright: ignore[reportArgumentType]
+        )
+    )
+    try:
+        quiz_set.questions = question_rows  # pyright: ignore[reportAttributeAccessIssue]
+    except Exception:
+        pass
+    return quiz_set
+
+
+def get_quiz_set(user_id: int, quiz_set_id: int, session: Session) -> QuizSet | None:
+    """
+    Fetch a QuizSet by id, scoped to user_id. Returns None when the set
+    does not exist or belongs to another user -- never raises on a
+    mismatched id, because the dashboard must silently skip another
+    user's rows.
+    """
+
+    statement = select(QuizSet).where(
+        QuizSet.id == quiz_set_id,  # pyright: ignore[reportArgumentType]
+        QuizSet.user_id == user_id,  # pyright: ignore[reportArgumentType]
+    )
+    return session.exec(statement).first()
+
+
+def list_today_quiz_sets(user_id: int, today: date, session: Session) -> list[QuizSet]:
+    """
+    Return this user's QuizSet rows with generated_on == today, ordered by
+    entry_id so a stable ordering reaches the dashboard.
+    """
+
+    statement = (
+        select(QuizSet)
+        .where(
+            QuizSet.user_id == user_id,  # pyright: ignore[reportArgumentType]
+            QuizSet.generated_on == today,  # pyright: ignore[reportArgumentType]
+        )
+        .order_by(QuizSet.entry_id)  # pyright: ignore[reportArgumentType]
+    )
+    return list(session.exec(statement).all())
+
+
