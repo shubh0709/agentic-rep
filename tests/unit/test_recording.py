@@ -246,6 +246,85 @@ def test_callback_capture_error_cannot_be_reported_as_successful_wav(tmp_path, a
     assert not list(tmp_path.iterdir())
 
 
+def test_stopped_recorder_cannot_restart_or_lose_its_owned_path(tmp_path, audio_source):
+    factory, _ = audio_source
+    with Recorder(temp_dir=tmp_path) as recorder:
+        recorder.start()
+        path = recorder.stop()
+        with pytest.raises(RecordingError):
+            recorder.start()
+        assert path.exists()
+        assert factory.call_count == 1
+    assert not path.exists()
+
+
+def test_interrupted_start_cleans_partial_resources_without_relying_on_context(tmp_path, audio_source):
+    factory, streams = audio_source
+    original_factory = factory.side_effect
+
+    def interrupt_start(**kwargs):
+        stream = original_factory(**kwargs)
+        stream.start_error = KeyboardInterrupt()
+        return stream
+
+    factory.side_effect = interrupt_start
+    recorder = Recorder(temp_dir=tmp_path)
+    with pytest.raises(KeyboardInterrupt):
+        recorder.start()
+    assert streams[0].closed
+    assert not list(tmp_path.iterdir())
+    recorder.close()
+
+
+@pytest.mark.parametrize("failure", [RuntimeError("pipeline failed"), KeyboardInterrupt()])
+def test_shutdown_failure_does_not_mask_original_exception_or_leave_audio(tmp_path, audio_source, failure):
+    _, streams = audio_source
+    with pytest.raises(type(failure)) as caught, Recorder(temp_dir=tmp_path) as recorder:
+        recorder.start()
+        streams[0].stop_error = OSError("device shutdown failed")
+        raise failure
+    assert caught.value is failure
+    assert streams[0].closed
+    assert not list(tmp_path.iterdir())
+
+
+def test_close_failure_discards_audio_and_can_retry_device_cleanup(tmp_path, audio_source):
+    _, streams = audio_source
+    recorder = Recorder(temp_dir=tmp_path)
+    recorder.start()
+    real_close = streams[0].close
+    streams[0].close = Mock(side_effect=OSError("device close failed"))
+    with pytest.raises(RecordingError, match="device close failed"):
+        recorder.stop()
+    assert not list(tmp_path.iterdir())
+    streams[0].close = real_close
+    recorder.close()
+    assert streams[0].closed
+
+
+def test_wav_write_failure_releases_device_and_discards_partial_file(tmp_path, audio_source, monkeypatch):
+    _, streams = audio_source
+    recorder = Recorder(temp_dir=tmp_path)
+    recorder.start()
+    streams[0].emit(struct.pack("<hh", 1, 2))
+    monkeypatch.setattr(wave.Wave_write, "writeframesraw", Mock(side_effect=OSError("disk full")))
+    with pytest.raises(RecordingError, match="disk full"):
+        recorder.stop()
+    assert streams[0].closed
+    assert not list(tmp_path.iterdir())
+
+
+def test_callback_buffer_failure_is_reported_on_stop(tmp_path, audio_source):
+    _, streams = audio_source
+    with Recorder(temp_dir=tmp_path) as recorder:
+        recorder.start()
+        streams[0].callback(b"\x00", 1, None, False)
+        with pytest.raises(RecordingError, match="incomplete PCM"):
+            recorder.stop()
+    assert streams[0].closed
+    assert not list(tmp_path.iterdir())
+
+
 class TerminalRecorder:
     """Fake only the recorder boundary for terminal interaction tests."""
 
