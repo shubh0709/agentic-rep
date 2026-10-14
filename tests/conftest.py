@@ -57,6 +57,42 @@ def other_user(session):
 
 
 @pytest.fixture
+def clock(monkeypatch):
+    """A controllable datetime.now(UTC) for scheduler / wakeup tests.
+
+    Phase 5 uses this to drive `users_due_for_wakeup` and the rate-limit /
+    scheduler clock without depending on real wall time. The fixture patches
+    `sra.db.models.datetime` (the same seam `tests/e2e/conftest.py::capture_api`
+    uses) so SQLModel timestamps also read from this controlled clock.
+    """
+    from datetime import UTC, datetime
+
+    from sra.db import models
+
+    fixed = [datetime(2026, 10, 14, 9, 0, tzinfo=UTC)]
+
+    class FixedClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is None:
+                return fixed[0].replace(tzinfo=None)
+            return fixed[0].astimezone(tz)
+
+    monkeypatch.setattr(models, "datetime", FixedClock)
+
+    def advance(seconds: int = 0, *, to: datetime | None = None) -> datetime:
+        if to is not None:
+            fixed[0] = to
+        else:
+            from datetime import timedelta
+
+            fixed[0] = fixed[0] + timedelta(seconds=seconds)
+        return fixed[0]
+
+    yield advance
+
+
+@pytest.fixture
 def client(monkeypatch, session):
     """
     A TestClient for create_app(), with the DB dependency overridden

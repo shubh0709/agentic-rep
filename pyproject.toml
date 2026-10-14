@@ -16,6 +16,7 @@ dependencies = [
     "alembic>=1.13",
     "google-auth[requests]>=2.38,<3",
     "httpx>=0.27,<1",
+    "apscheduler>=3.10,<4",
 ]
 
 [project.optional-dependencies]
@@ -53,6 +54,7 @@ markers = [
     "phase2: voice-capture teaching contracts (intentionally red until implemented)",
     "phase3: authentication, isolation, desktop credential, and rate-limit TDD contracts",
     "phase4: daily MCQ quiz -- schema, agent, job, API, dashboard, integration verification",
+    "phase5: scheduled wake-up & voice quiz -- user preferences, scheduler, TTS, voice graph, voice router, client extensions, wakeup loop, voice quiz driver",
     "whisper: opt-in real local Whisper inference",
     "desktop: requires macOS and installed desktop dependencies",
     "live_openai: explicit opt-in calls to the real OpenAI service",

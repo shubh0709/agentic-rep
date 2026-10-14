@@ -8,6 +8,7 @@ from sra.api.rate_limit import RateLimitState
 from sra.api.routers import api_router
 from sra.config import get_settings
 from sra.db.session import init_db
+from sra.jobs.digest_scheduler import start_scheduler, stop_scheduler
 
 API_V1_PREFIX = "/api/v1"
 
@@ -41,8 +42,10 @@ def create_app(*, rate_limit_clock: Callable[[], float] = monotonic) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         try:
+            start_scheduler(app)
             yield
         finally:
+            stop_scheduler(app)
             limits.reset()
 
     init_db()

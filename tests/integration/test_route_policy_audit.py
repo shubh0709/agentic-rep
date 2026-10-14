@@ -20,6 +20,7 @@ def test_every_mounted_route_has_an_explicit_authentication_and_limit_policy(cli
         ("POST", "/api/v1/entries/ingest"): "user",
         ("GET", "/api/v1/search"): "user",
         ("GET", "/api/v1/digest"): "user",
+        ("GET", "/api/v1/digest/ready"): "user",
         ("POST", "/api/v1/chat"): "user",
         ("GET", "/api/v1/quiz/today"): "user",
         ("GET", "/api/v1/quiz/{quiz_set_id}"): "user",

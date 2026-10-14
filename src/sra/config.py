@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     rate_limit_anonymous_capacity: int = Field(default=20, gt=0)
     rate_limit_anonymous_refill_per_second: float = Field(default=0.2, gt=0, allow_inf_nan=False)
     rate_limit_idle_ttl_seconds: float = Field(default=3600, gt=0, allow_inf_nan=False)
+    scheduler_pregen_hour_utc: int = Field(default=4, ge=0, le=23)
+    scheduler_wakeup_interval_s: int = Field(default=60, ge=5)
+    scheduler_enabled: bool = True
 
     @model_validator(mode="after")
     def validate_rate_limit_ttl(self) -> Self:
