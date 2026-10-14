@@ -27,13 +27,18 @@ from datetime import UTC, date, datetime
 from enum import StrEnum
 
 from pydantic import field_validator
-from sqlalchemy import CheckConstraint, Enum
+from sqlalchemy import CheckConstraint, Enum, UniqueConstraint
 from sqlmodel import JSON, Column, Field, SQLModel
 
 
 def _utcnow() -> datetime:
     """Timezone-aware "now" -- this SQLModel version rejects naive datetimes on write."""
     return datetime.now(UTC)
+
+
+def _utcnow_date() -> date:
+    """Today's date in UTC -- the default for QuizSet.generated_on."""
+    return datetime.now(UTC).date()
 
 
 class UserRole(StrEnum):
@@ -132,3 +137,92 @@ class ReviewSchedule(ReviewScheduleBase, table=True):
     id: int | None = Field(default=None, primary_key=True)
     status: str = Field(default="pending")
     completed_at: datetime | None = None
+
+
+class QuizSetBase(SQLModel):
+    entry_id: int = Field(foreign_key="study_entries.id")
+
+
+class QuizSetCreate(QuizSetBase):
+    """What a caller may supply to create a QuizSet -- no id, user_id, generated_on, or snapshot counts."""
+
+    model_config = {"extra": "forbid"}
+
+
+class QuizSet(QuizSetBase, table=True):
+    __tablename__ = "quiz_sets"  # pyright: ignore[reportAssignmentType]
+    __table_args__ = (
+        UniqueConstraint("entry_id", "generated_on", name="uq_quiz_sets_entry_generated_on"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="users.id", index=True)
+    generated_on: date = Field(default_factory=_utcnow_date)
+    question_count: int
+    option_count: int
+
+
+class QuizQuestionBase(SQLModel):
+    quiz_set_id: int = Field(foreign_key="quiz_sets.id", index=True)
+    question_text: str
+    options: list[str] = Field(default_factory=list, sa_column=Column(JSON, nullable=False))
+    correct_option_index: int
+    explanation: str | None = None
+    order_index: int
+
+
+class QuizQuestionCreate(QuizQuestionBase):
+    """What a caller may supply to create a QuizQuestion -- no id."""
+
+    model_config = {"extra": "forbid"}
+
+
+class QuizQuestion(QuizQuestionBase, table=True):
+    __tablename__ = "quiz_questions"  # pyright: ignore[reportAssignmentType]
+
+    id: int | None = Field(default=None, primary_key=True)
+
+
+class QuizAttemptBase(SQLModel):
+    quiz_set_id: int = Field(foreign_key="quiz_sets.id")
+    user_id: int = Field(foreign_key="users.id", index=True)
+    mode: str = "web"
+    total_questions: int
+
+
+class QuizAttemptCreate(QuizAttemptBase):
+    """What a caller may supply to create a QuizAttempt -- no id, started_at, completed_at, or score."""
+
+    model_config = {"extra": "forbid"}
+
+
+class QuizAttempt(QuizAttemptBase, table=True):
+    __tablename__ = "quiz_attempts"  # pyright: ignore[reportAssignmentType]
+
+    id: int | None = Field(default=None, primary_key=True)
+    started_at: datetime = Field(default_factory=_utcnow)
+    completed_at: datetime | None = None
+    score: int | None = None
+
+
+class QuizAnswerBase(SQLModel):
+    attempt_id: int = Field(foreign_key="quiz_attempts.id", index=True)
+    question_id: int = Field(foreign_key="quiz_questions.id")
+    selected_option_index: int | None = None
+    is_correct: bool
+
+
+class QuizAnswerCreate(QuizAnswerBase):
+    """What a caller may supply to create a QuizAnswer -- no id or answered_at."""
+
+    model_config = {"extra": "forbid"}
+
+
+class QuizAnswer(QuizAnswerBase, table=True):
+    __tablename__ = "quiz_answers"  # pyright: ignore[reportAssignmentType]
+    __table_args__ = (
+        UniqueConstraint("attempt_id", "question_id", name="uq_quiz_answers_attempt_question"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    answered_at: datetime = Field(default_factory=_utcnow)
