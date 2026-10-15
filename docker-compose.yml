@@ -1,0 +1,60 @@
+version: "3.9"
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: spaced-repetition-agent:local
+    container_name: sra-app
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: sqlite:////app/data/sra.db
+    ports:
+      - "8000:8000"
+    volumes:
+      - sra-data:/app/data
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=2).status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: sra-postgres
+    profiles:
+      - postgres
+    environment:
+      POSTGRES_DB: sra
+      POSTGRES_USER: sra
+      POSTGRES_PASSWORD: sra-dev
+    volumes:
+      - sra-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sra -d sra"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  demo:
+    extends:
+      service: app
+    container_name: sra-demo
+    profiles:
+      - demo
+    environment:
+      DEMO_MODE: "true"
+      DEMO_DATA_RETENTION_DAYS: "7"
+    ports:
+      - "8001:8000"
+    volumes:
+      - sra-data-demo:/app/data
+
+volumes:
+  sra-data:
+  sra-data-demo:
+  sra-postgres:
