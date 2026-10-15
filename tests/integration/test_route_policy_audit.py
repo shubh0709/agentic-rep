@@ -33,6 +33,7 @@ def test_every_mounted_route_has_an_explicit_authentication_and_limit_policy(cli
         ("PUT", "/api/v1/me/preferences"): "user",
         ("GET", "/api/v1/admin/usage"): "admin",
         ("GET", "/api/v1/admin/rate-limits"): "admin",
+        ("POST", "/api/v1/admin/demo/reset"): "admin",
     }
     framework_public = {"/openapi.json", "/docs", "/docs/oauth2-redirect", "/redoc"}
     seen = set()

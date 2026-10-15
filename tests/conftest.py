@@ -1,3 +1,5 @@
+from datetime import UTC, date, datetime, timedelta
+
 import pytest
 from sqlmodel import Session, SQLModel, create_engine, select
 from sqlmodel.pool import StaticPool
@@ -53,6 +55,101 @@ def other_user(session):
     session.add(user)
     session.commit()
     session.refresh(user)
+    return user
+
+
+@pytest.fixture
+def demo_user(session):
+    """A demo-mode user with a full dependent subgraph.
+
+    Creates one ``User`` row with ``is_demo_user=True`` plus one study
+    entry, one review schedule, one quiz set, one quiz question, one
+    quiz attempt, and one quiz answer — enough to assert the
+    ``delete_user_cascade`` end-to-end clear and the
+    ``POST /admin/demo/reset`` lifecycle.
+    """
+    from sra.agents.schemas import MCQDraft
+    from sra.db.models import (
+        QuizAnswer,
+        QuizAttempt,
+        QuizQuestion,
+        StudyEntry,
+        User,
+    )
+    from sra.db.repository import create_quiz_set, schedule_reviews_for_entry
+
+    user = session.exec(select(User).where(User.google_sub == "demo-subject")).first()
+    if user is not None:
+        return user
+    user = User(
+        email="demo@example.com",
+        display_name="Demo User",
+        google_sub="demo-subject",
+        is_demo_user=True,
+    )
+    session.add(user)
+    session.commit()
+    session.refresh(user)
+    assert user.id is not None
+
+    entry = StudyEntry(user_id=user.id, topic="DemoTopic", summary="s", raw_transcript="t")
+    session.add(entry)
+    session.commit()
+    session.refresh(entry)
+    assert entry.id is not None
+    schedule_reviews_for_entry(entry.id, date.today(), session)
+
+    drafts = [
+        MCQDraft(
+            question_text="What is 1+1?",
+            options=["1", "2", "3", "4"],
+            correct_option_index=1,
+            explanation="Basic arithmetic.",
+        )
+    ]
+    quiz_set = create_quiz_set(
+        session=session,
+        user_id=user.id,
+        entry=entry,
+        generated_on=date.today(),
+        question_count=len(drafts),
+        option_count=4,
+        drafts=drafts,
+    )
+    assert quiz_set.id is not None
+    attempt = QuizAttempt(
+        user_id=user.id,
+        quiz_set_id=quiz_set.id if quiz_set.id is not None else 0,
+        mode="web",
+        total_questions=quiz_set.question_count,
+    )
+    session.add(attempt)
+    session.commit()
+    session.refresh(attempt)
+    question = session.exec(
+        select(QuizQuestion).where(QuizQuestion.quiz_set_id == quiz_set.id)
+    ).first()
+    assert question is not None
+    assert attempt.id is not None
+    answer = QuizAnswer(
+        attempt_id=attempt.id,
+        question_id=question.id,
+        selected_option_index=1,
+        is_correct=True,
+    )
+    session.add(answer)
+    session.commit()
+
+    # Backdate the entry and attempt so the demo reset retention test
+    # (`list_old_demo_users` cutoff at retention_days) finds the user.
+    from sqlalchemy import text
+
+    past = datetime.now(UTC) - timedelta(days=10)
+    session.execute(
+        text("UPDATE study_entries SET created_at = :ts WHERE id = :id"),
+        {"ts": past.strftime("%Y-%m-%d %H:%M:%S"), "id": entry.id},
+    )
+    session.commit()
     return user
 
 
