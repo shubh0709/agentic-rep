@@ -213,6 +213,22 @@ def start_scheduler(app: FastAPI) -> None:
         coalesce=True,
         next_run_time=datetime.now(UTC) + timedelta(seconds=settings.scheduler_wakeup_interval_s),
     )
+    if settings.demo_mode:
+        from sra.jobs.demo_reset import build_demo_reset_job
+
+        scheduler.add_job(
+            build_demo_reset_job(_session_factory, settings.demo_data_retention_days),
+            trigger="interval",
+            seconds=settings.demo_reset_interval_s,
+            id="sra.demo_reset",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            next_run_time=datetime.now(UTC) + timedelta(seconds=settings.demo_reset_interval_s),
+        )
+        logger.info(
+            "Demo reset interval registered (every %s s)", settings.demo_reset_interval_s
+        )
     scheduler.start()
     app.state.scheduler = scheduler
 

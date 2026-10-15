@@ -106,16 +106,25 @@ class RateLimitState:
 
     @classmethod
     def from_settings(cls, settings: Settings, clock: Callable[[], float] = monotonic) -> "RateLimitState":
+        auth_capacity = settings.rate_limit_authenticated_capacity
+        auth_refill = settings.rate_limit_authenticated_refill_per_second
+        anon_capacity = settings.rate_limit_anonymous_capacity
+        anon_refill = settings.rate_limit_anonymous_refill_per_second
+        if settings.demo_mode:
+            auth_capacity = max(1, auth_capacity // 10)
+            anon_capacity = max(1, anon_capacity // 10)
+            auth_refill = auth_refill / 10
+            anon_refill = anon_refill / 10
         return cls(
             authenticated=TokenBucketLimiter(
-                capacity=settings.rate_limit_authenticated_capacity,
-                refill_tokens_per_second=settings.rate_limit_authenticated_refill_per_second,
+                capacity=auth_capacity,
+                refill_tokens_per_second=auth_refill,
                 idle_ttl_seconds=settings.rate_limit_idle_ttl_seconds,
                 clock=clock,
             ),
             anonymous=TokenBucketLimiter(
-                capacity=settings.rate_limit_anonymous_capacity,
-                refill_tokens_per_second=settings.rate_limit_anonymous_refill_per_second,
+                capacity=anon_capacity,
+                refill_tokens_per_second=anon_refill,
                 idle_ttl_seconds=settings.rate_limit_idle_ttl_seconds,
                 clock=clock,
             ),

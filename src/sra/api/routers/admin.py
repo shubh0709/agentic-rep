@@ -2,12 +2,13 @@
 
 from datetime import UTC, datetime, time
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func
 from sqlmodel import Session, select
 
 from sra.api.deps import get_session, require_admin
 from sra.api.rate_limit import RateLimitState, RateLimitSummary, get_rate_limits, limit_authenticated
+from sra.config import get_settings
 from sra.db.models import StudyEntry, User
 
 router = APIRouter(
@@ -40,3 +41,28 @@ def get_usage(
         "entry_count": entry_count,
         "entries_created_today": entries_created_today,
     }
+
+
+@router.post("/demo/reset")
+def post_demo_reset(
+    admin: User = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> dict[str, int]:
+    """On-demand demo reset. Returns ``{"deleted": int}``.
+
+    Returns HTTP 503 when ``Settings.demo_mode`` is False — the route is
+    mounted unconditionally, but the destructive operation is refused.
+    """
+    del admin
+    settings = get_settings()
+    if not settings.demo_mode:
+        raise HTTPException(
+            status_code=503,
+            detail="Demo mode is not enabled (DEMO_MODE=false)",
+        )
+    from sra.jobs.demo_reset import reset_demo_data
+
+    return reset_demo_data(
+        settings.demo_data_retention_days,
+        session_factory=lambda: session,
+    )
