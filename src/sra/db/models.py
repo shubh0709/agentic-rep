@@ -28,7 +28,7 @@ from enum import StrEnum
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import field_validator
-from sqlalchemy import CheckConstraint, Enum, Integer, String, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, Enum, Integer, String, UniqueConstraint
 from sqlmodel import JSON, Column, Field, SQLModel
 
 
@@ -74,6 +74,7 @@ class UserBase(SQLModel):
         default=4,
         sa_column=Column(Integer, nullable=False, server_default="4"),
     )
+    is_demo_user: bool = False  # SRA-601: marker used by the demo reset job (SRA-603)
 
     @field_validator("preferred_review_time")
     @classmethod
@@ -145,12 +146,25 @@ class User(UserBase, table=True):
             "quiz_question_count BETWEEN 1 AND 20 AND quiz_option_count BETWEEN 2 AND 6",
             name="ck_users_quiz_counts_positive",
         ),
+        CheckConstraint(
+            "is_demo_user IN (0, 1)",
+            name="ck_users_is_demo_user_boolean",
+        ),
     )
 
     id: int | None = Field(default=None, primary_key=True)
     # Nullable only for preserved pre-OAuth local users. Every user created by
     # the Phase 3 OAuth path must have a non-empty, provider-verified subject.
     google_sub: str | None = Field(default=None, unique=True, index=True)
+    # Override the inherited Pydantic default with an explicit SQLAlchemy
+    # column so ``SQLModel.metadata.create_all`` (used by tests and the
+    # first-boot migration) emits a ``DEFAULT 0`` server-side default. Without
+    # this, raw-SQL inserts that omit ``is_demo_user`` would fail the NOT NULL
+    # constraint even though the Python default is ``False``.
+    is_demo_user: bool = Field(
+        default=False,
+        sa_column=Column(Boolean, nullable=False, server_default="0"),
+    )
     role: UserRole = Field(
         default=UserRole.USER,
         sa_column=Column(

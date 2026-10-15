@@ -9,7 +9,7 @@ from datetime import UTC, date, datetime, time
 from typing import TypedDict
 
 from sqlalchemy.exc import IntegrityError
-from sqlmodel import Session, String, cast, or_, select
+from sqlmodel import Session, String, cast, func, or_, select
 
 from sra.agents.schemas import MCQDraft
 from sra.db.models import (
@@ -454,3 +454,140 @@ def advance_quiz_cursor(*, attempt: QuizAttempt, session: Session) -> QuizAttemp
     session.commit()
     session.refresh(attempt)
     return attempt
+
+
+def _demo_user_dependents_minimum(user_id: int, session: Session) -> datetime | None:
+    """Return the minimum related timestamp for a user, or None when no dependents are attached.
+
+    Iterates every dependent table the SRA-603 cascade clears and returns the
+    smallest timestamp among them. ``None`` means the user has no dependents and
+    must not be returned by ``list_old_demo_users`` (SRA-603's spec).
+    """
+    candidates: list[datetime] = []
+
+    entry_min = session.exec(
+        select(func.min(StudyEntry.created_at)).where(StudyEntry.user_id == user_id)
+    ).one()
+    if entry_min is not None:
+        candidates.append(entry_min)
+
+    schedule_min = session.exec(
+        select(func.min(ReviewSchedule.scheduled_date))
+        .join(StudyEntry)
+        .where(StudyEntry.user_id == user_id)
+    ).one()
+    if schedule_min is not None:
+        # Convert the date column to a timezone-aware datetime at UTC midnight so
+        # the comparison against ``as_of_utc - retention_days`` is consistent.
+        candidates.append(datetime.combine(schedule_min, time.min, tzinfo=UTC))
+
+    quiz_set_min = session.exec(
+        select(func.min(QuizSet.generated_on)).where(QuizSet.user_id == user_id)
+    ).one()
+    if quiz_set_min is not None:
+        candidates.append(datetime.combine(quiz_set_min, time.min, tzinfo=UTC))
+
+    quiz_attempt_min = session.exec(
+        select(func.min(QuizAttempt.started_at)).where(QuizAttempt.user_id == user_id)
+    ).one()
+    if quiz_attempt_min is not None:
+        candidates.append(quiz_attempt_min)
+
+    if not candidates:
+        return None
+    return min(candidates)
+
+
+def list_old_demo_users(
+    retention_days: int,
+    as_of_utc: datetime,
+    session: Session,
+) -> list[tuple[User, datetime]]:
+    """Return every demo user whose oldest dependent timestamp is older than the cutoff.
+
+    A demo user with no dependents is never returned -- ``reset_demo_data`` keeps
+    those rows intact so an OAuth user who never captured anything survives a
+    cleanup. Each tuple pairs the user with the timestamp used to decide
+    eligibility so callers can log or audit the cutoff.
+    """
+    cutoff = as_of_utc - timedelta(days=retention_days)
+    rows: list[tuple[User, datetime]] = []
+    for user in session.exec(
+        select(User).where(User.__table__.c.is_demo_user.is_(True))  # type: ignore[attr-defined]
+    ).all():
+        assert user.id is not None
+        oldest = _demo_user_dependents_minimum(user.id, session)
+        if oldest is None or oldest > cutoff:
+            continue
+        rows.append((user, oldest))
+    return rows
+
+
+def delete_user_cascade(user: User, session: Session) -> None:
+    """Delete ``user`` and every dependent row in FK-safe order.
+
+    The cascade touches ``study_entries`` (which clears ``review_schedules``),
+    ``quiz_sets`` (which clears ``quiz_questions``), and ``quiz_attempts``
+    (which clears ``quiz_answers``). A detached/already-deleted user raises
+    ``UserNotFoundError`` so callers can distinguish a successful delete from a
+    no-op. The caller owns the surrounding transaction / commit.
+    """
+    if user.id is None or session.get(User, user.id) is None:
+        raise UserNotFoundError(f"user {getattr(user, 'id', None)!r} is not present in this session")
+
+    user_id = user.id
+
+    # quiz_answers must die before quiz_attempts because the FK on
+    # quiz_answers.attempt_id does not declare ondelete="CASCADE" in this
+    # schema. With SQLite (the default dev/test engine) FK enforcement is
+    # off by default, so leaving the answers in place leaves dangling rows
+    # that survive the user delete. Explicit cascade keeps the schema
+    # portable to Postgres regardless of session-level PRAGMA settings.
+    attempt_ids: list[int] = []
+    for attempt in session.exec(
+        select(QuizAttempt).where(QuizAttempt.user_id == user_id)  # pyright: ignore[reportArgumentType]
+    ).all():
+        assert attempt.id is not None
+        attempt_ids.append(attempt.id)
+    if attempt_ids:
+        for answer in session.exec(
+            select(QuizAnswer).where(
+                QuizAnswer.attempt_id.in_(attempt_ids)  # type: ignore[arg-type]
+            )
+        ).all():
+            session.delete(answer)
+
+    # quiz_attempts must die first so the quiz_sets->quiz_attempts link is
+    # free when we clear quiz_sets.
+    for attempt in session.exec(
+        select(QuizAttempt).where(QuizAttempt.user_id == user_id)
+    ).all():
+        session.delete(attempt)
+
+    # quiz_sets and the dependent quiz_questions row by row (no FK cascade from
+    # the platform default; SQLAlchemy ORM cascade may not be configured for
+    # quiz_set -> questions).
+    for quiz_set in session.exec(
+        select(QuizSet).where(QuizSet.user_id == user_id)
+    ).all():
+        for question in session.exec(
+            select(QuizQuestion).where(QuizQuestion.quiz_set_id == quiz_set.id)
+        ).all():
+            session.delete(question)
+        session.delete(quiz_set)
+
+    # study_entries and the dependent review_schedules.
+    for entry in session.exec(
+        select(StudyEntry).where(StudyEntry.user_id == user_id)
+    ).all():
+        for review in session.exec(
+            select(ReviewSchedule).where(ReviewSchedule.entry_id == entry.id)
+        ).all():
+            session.delete(review)
+        session.delete(entry)
+
+    session.delete(user)
+    session.flush()
+
+
+from datetime import timedelta  # noqa: E402  -- late import keeps the SRA-601 surface above the cascade
