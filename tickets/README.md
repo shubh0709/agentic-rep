@@ -527,10 +527,10 @@ closes the phase.
 | Ticket | Title | Blocked by | Status |
 |---|---|---|---|
 | [SRA-601](SRA-601-demo-mode-settings-and-user-marker.md) | Demo-mode settings and per-user marker column | — | Implemented — 2026-10-14 |
-| [SRA-602](SRA-602-dockerfile-and-docker-compose.md) | Dockerfile and docker-compose.yml | — | Open |
-| [SRA-603](SRA-603-demo-reset-job-and-admin-endpoint.md) | Demo reset job and admin endpoint | SRA-601 | Open |
-| [SRA-604](SRA-604-self-host-documentation.md) | Self-host documentation | SRA-602, SRA-603 | Open |
-| [SRA-605](SRA-605-phase-6-integration-verification.md) | Phase 6 integration verification | SRA-601–604 | Open |
+| [SRA-602](SRA-602-dockerfile-and-docker-compose.md) | Dockerfile and docker-compose.yml | — | Implemented — 2026-10-14 |
+| [SRA-603](SRA-603-demo-reset-job-and-admin-endpoint.md) | Demo reset job and admin endpoint | SRA-601 | Implemented — 2026-10-14 |
+| [SRA-604](SRA-604-self-host-documentation.md) | Self-host documentation | SRA-602, SRA-603 | Implemented — 2026-10-14 |
+| [SRA-605](SRA-605-phase-6-integration-verification.md) | Phase 6 integration verification | SRA-601–604 | Done — 2026-10-14 |
 
 Suggested order, and what each step gives you to run:
 

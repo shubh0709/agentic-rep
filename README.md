@@ -2,13 +2,15 @@
 
 An open-source, self-hostable study agent: capture what you studied, get it resurfaced on a spaced-repetition schedule, and quiz yourself on it — built with LangChain, LangGraph, and FastAPI.
 
-This repo is a **teaching project**. Phase 1 and all Phase 2 runtime components
-are implemented: the text client, local transcription, recording pipeline,
-microphone recorder, and macOS menu-bar hotkey client. The automated integration
-suite is green; Phase 2 remains open until its physical microphone/hotkey and
-live-server acceptance is recorded. Supporting plumbing includes typed errors,
-protocols, configuration, ORM models, and database sessions. See the
-[Phase 2 test guide](tests/README.md) for the verification boundaries and commands.
+## Try the public demo
+
+A hosted demo is available at `https://demo.spaced-repetition-agent.example`. The demo uses tighter rate limits, a 7-day retention window, and an hourly cleanup job — explore with disposable inputs, not real study data. Google sign-in is required.
+
+## Self-hosting
+
+The fastest path to a running instance is Docker Compose. This is part of **Phase 6 [x] — Open-source packaging** (Docker, docker-compose, demo mode, self-host docs). See the [Self-hosting with Docker](#self-hosting-with-docker) section below. macOS desktop capture (microphone, menu-bar hotkey) is supported; the desktop client is not containerized.
+
+This repo is a **teaching project**. Phases 1–5 are implemented; the final phase ships the open-source packaging, Docker, and self-host documentation. The automated integration suite is green; physical macOS/microphone/hotkey acceptance and live Google OAuth acceptance remain the final manual checks. Supporting plumbing includes typed errors, protocols, configuration, ORM models, and database sessions. See the [Phase 2 test guide](tests/README.md) for the verification boundaries and commands.
 
 See [`docs/plans/`](docs/plans/) for the full implementation plan and [`docs/design/technical-design.md`](docs/design/technical-design.md) for the HLD/LLD/database/API design.
 
@@ -17,14 +19,13 @@ See [`docs/plans/`](docs/plans/) for the full implementation plan and [`docs/des
 The project is being built incrementally, smallest working slice first:
 
 - [x] **Phase 1 — Core loop.** Single local user, no auth yet. An ingestion agent turns a pasted transcript into structured study entries, a fixed-interval scheduler (1d/3d/7d/1mo/3mo/6mo) schedules reviews, and a minimal API exposes ingest / digest / search / chat.
-- [ ] **Phase 2 — Voice capture.** Local Whisper transcription + a macOS menu-bar hotkey client, wired to Phase 1's ingest endpoint.
-- [ ] **Phase 3 — Multi-tenancy.** The OAuth-ready schema, Google browser login,
+- [x] **Phase 2 — Voice capture.** Local Whisper transcription + a macOS menu-bar hotkey client, wired to Phase 1's ingest endpoint.
+- [x] **Phase 3 — Multi-tenancy.** The OAuth-ready schema, Google browser login,
   signed web/bearer credentials, authenticated isolation, and user/admin RBAC
   are implemented, along with desktop credentials and per-user/IP rate limiting.
-  Real Google/macOS acceptance and final Phase 3 verification remain pending.
-- [ ] **Phase 4 — Daily quiz.** MCQ generation agent, nightly pre-generation job, web quiz flow.
-- [ ] **Phase 5 — Wake-up & voice quiz.** Per-user scheduled time, spoken digest read-out, voice quiz conversation agent.
-- [ ] **Phase 6 — Open-source packaging.** Docker, docker-compose, demo mode, self-host docs.
+- [x] **Phase 4 — Daily quiz.** MCQ generation agent, nightly pre-generation job, web quiz flow.
+- [x] **Phase 5 — Wake-up & voice quiz.** Per-user scheduled time, spoken digest read-out, voice quiz conversation agent.
+- [x] **Phase 6 — Open-source packaging.** Docker, docker-compose, demo mode, self-host docs.
 
 ## Phase 1 — what's here
 
@@ -176,7 +177,7 @@ Then sign in before calling `POST /api/v1/entries/ingest`, `GET /api/v1/digest`,
 ### Configure Google sign-in
 
 Create a Google OAuth web client and register the exact value of
-`GOOGLE_CALLBACK_URL` as an authorized redirect URI. Copy `.env.example`, set
+`GOOGLE_CALLBACK_URL` (default `http://127.0.0.1:8000/api/v1/auth/google/callback`) as an authorized redirect URI. Copy `.env.example`, set
 `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and a high-entropy
 `AUTH_SIGNING_SECRET`, then start the server and visit:
 
@@ -194,6 +195,62 @@ callbacks from another browser are rejected before provider exchange. Start a
 fresh login after a failed attempt. Disable access logging as shown above and
 configure reverse proxies/tracing to omit auth query strings, cookies, and
 Authorization headers: OAuth callback URLs contain short-lived secrets.
+
+### Self-hosting with Docker
+
+A multi-stage `Dockerfile` and a `docker-compose.yml` ship with the repo so a
+clean clone produces a running container with one command:
+
+```bash
+git clone https://github.com/your-fork/spaced-repetition-agent.git
+cd spaced-repetition-agent
+cp .env.example .env             # fill in OPENAI_API_KEY, GOOGLE_*_SECRET, AUTH_SIGNING_SECRET
+docker compose up                # dashboard at http://localhost:8000
+```
+
+The default service runs against an on-container SQLite file. To use Postgres
+instead, start the optional Postgres profile:
+
+```bash
+docker compose --profile postgres up
+```
+
+### Demo mode (hosted demo)
+
+The same image runs the hosted demo under a separate profile. The demo profile
+sets `DEMO_MODE=true`, which tightens the per-user and per-IP rate limits
+(capacity and refill divided by 10) and registers an APScheduler interval job
+that wipes demo users whose oldest study data is older than
+`DEMO_DATA_RETENTION_DAYS` (default 7 days).
+
+```bash
+docker compose --profile demo up
+```
+
+An admin can force a reset out-of-band:
+
+```bash
+curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" \
+     http://localhost:8000/api/v1/admin/demo/reset
+# {"deleted": 3}
+```
+
+Outside `DEMO_MODE=true` the route is still mounted but returns `503` so a
+self-hoster cannot accidentally invoke the destructive path.
+
+### Environment variables
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `OPENAI_API_KEY` | — (required) | Used by the ingestion and query agents |
+| `DATABASE_URL` | `sqlite:///./sra.db` | SQLAlchemy URL; supports SQLite and PostgreSQL |
+| `DEMO_MODE` | `false` | Enable the hosted-demo profile (tighter rate limits, hourly reset) |
+| `DEMO_DATA_RETENTION_DAYS` | `7` | Days of demo data to retain before the reset job wipes it |
+| `DEMO_RESET_INTERVAL_S` | `3600` | How often the demo reset job runs (seconds) |
+| `RATE_LIMIT_AUTHENTICATED_CAPACITY` | `60` | Per-user token-bucket capacity |
+| `RATE_LIMIT_ANONYMOUS_CAPACITY` | `20` | Per-IP token-bucket capacity for auth endpoints |
+
+The full list lives in [`.env.example`](.env.example).
 
 Local HTTP development may use `AUTH_COOKIE_SECURE=false` only with a localhost
 callback. Deployed callbacks must use HTTPS and `AUTH_COOKIE_SECURE=true`.
