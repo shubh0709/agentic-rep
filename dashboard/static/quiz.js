@@ -132,13 +132,22 @@
       li.appendChild(
         el(doc, "span", { "data-field": "count" }, qCount + " questions")
       );
-      li.appendChild(
+      var actions = el(doc, "span", { "data-field": "actions" });
+      actions.appendChild(
         el(doc, "button", {
           "data-action": "start",
           "data-quiz-set-id": String(item.id),
           type: "button",
         }, "Start")
       );
+      actions.appendChild(
+        el(doc, "button", {
+          "data-action": "start-interview",
+          "data-quiz-set-id": String(item.id),
+          type: "button",
+        }, "Start interview")
+      );
+      li.appendChild(actions);
       list.appendChild(li);
     }
     root.appendChild(list);

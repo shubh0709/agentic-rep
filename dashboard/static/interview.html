@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Interview Dashboard</title>
+<style>
+  #interview-root {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-width: 720px;
+    margin: 16px auto;
+    padding: 16px;
+    font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+    color: #1a1a1a;
+  }
+  #interview-root > * { display: block; }
+  #interview-root h2 { margin: 0; font-size: 1.1rem; }
+  #interview-root [data-panel="status"] {
+    border: 1px solid #ccc;
+    padding: 12px;
+    background: #fafafa;
+  }
+  #interview-root [data-panel="transcript"] {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+  #interview-root [data-panel="transcript"] > li {
+    padding: 8px;
+    border-bottom: 1px solid #eee;
+  }
+  #interview-root textarea { width: 100%; }
+  #interview-root button { padding: 4px 10px; cursor: pointer; margin-right: 4px; }
+</style>
+</head>
+<body>
+<div id="interview-root"></div>
+<script>
+  (function () {
+    function boot() {
+      if (typeof window.initInterview === "function") {
+        window.initInterview(document.getElementById("interview-root"), document);
+        return true;
+      }
+      return false;
+    }
+    if (!boot()) {
+      var tries = 0;
+      var interval = setInterval(function () {
+        if (boot() || ++tries > 50) clearInterval(interval);
+      }, 20);
+    }
+  })();
+</script>
+<script type="module" src="/dashboard-static/interview.js"></script>
+</body>
+</html>
