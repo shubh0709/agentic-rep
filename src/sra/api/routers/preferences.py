@@ -23,6 +23,8 @@ def _to_out(prefs: UserPreferences) -> PreferencesOut:
         timezone=prefs["timezone"],
         quiz_question_count=prefs["quiz_question_count"],
         quiz_option_count=prefs["quiz_option_count"],
+        interview_question_count=prefs["interview_question_count"],
+        interview_target_minutes=prefs["interview_target_minutes"],
         wakeup_notification_sent_at=prefs["wakeup_notification_sent_at"],
     )
 
@@ -73,12 +75,16 @@ def put_preferences(
 
     user = _caller(request)
     assert user.id is not None
-    payload = {
+    payload: dict[str, object] = {
         "preferred_review_time": parsed.preferred_review_time,
         "timezone": parsed.timezone,
         "quiz_question_count": parsed.quiz_question_count,
         "quiz_option_count": parsed.quiz_option_count,
     }
+    if parsed.interview_question_count is not None:
+        payload["interview_question_count"] = parsed.interview_question_count
+    if parsed.interview_target_minutes is not None:
+        payload["interview_target_minutes"] = parsed.interview_target_minutes
     try:
         prefs = update_user_preferences(user.id, payload, session)
     except UserNotFoundError as exc:

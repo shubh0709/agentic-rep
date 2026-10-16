@@ -637,12 +637,278 @@ lifecycle; earlier tickets must already have their own evidence.
 
 ---
 
+## Board — Phase 7 (Study dashboard)
+
+Phase 7 turns every captured study entry and every scheduled review into a
+single browsable page. The dashboard is a read-only SSR shell in `web/` that
+fetches `/api/v1/search`, `/api/v1/digest`, and a new
+`/api/v1/reviews/upcoming` endpoint through the existing Phase 1–6 server.
+There is no new server-side data model; the page joins `study_entries` and
+`review_schedules` (both Phase 1 tables) through the existing
+user-scoped repository helpers.
+
+| Ticket | Title | Blocked by | Status |
+|---|---|---|---|
+| [SRA-701](SRA-701-study-dashboard.md) | Study dashboard: entries, search, upcoming reviews | SRA-104, SRA-404, SRA-502 | Implemented — 2026-10-15 |
+
+Suggested order, and what each step gives you to run:
+
+1. **701** — sign in as a user with a handful of captures, open
+   `/dashboard`, and see every entry listed, the search box narrow it in
+   real time, each entry's original transcript on expand, and the
+   upcoming-reviews timeline reflect the same six checkpoints
+   `1d/3d/7d/1mo/3mo/6mo` the scheduler already writes.
+
+```mermaid
+flowchart LR
+    406[SRA-406 Phase 4 verified] --> 502[SRA-502 Digest ready endpoint]
+    502 --> 701[SRA-701 Study dashboard]
+    404[SRA-404 Quiz API endpoints] --> 701
+    104[SRA-104 API skeleton] --> 701
+```
+
+### How the Phase 7 files work together
+
+At runtime, the dashboard browser tab fetches three read endpoints. The
+server is unchanged from Phase 1–6 except for one new route that exposes
+the "future scheduled reviews" view that `/digest` deliberately does not
+own. Every read is user-scoped on the server, so a second signed-in user
+sees only their own entries and reviews even if they hit the same URL.
+
+```mermaid
+flowchart LR
+    subgraph Browser[Browser tab at /dashboard]
+        Page[dashboard.html shell]
+        JS[dashboard.js]
+        Page --> JS
+    end
+
+    subgraph Server[FastAPI process]
+        Search[api/routers/search.py]
+        Digest[api/routers/digest.py]
+        Reviews[api/routers/reviews.py - new in Phase 7]
+        Repo[db/repository.py]
+        DB[(study_entries, review_schedules)]
+        Search --> Repo
+        Digest --> Repo
+        Reviews --> Repo
+        Repo --> DB
+    end
+
+    JS -->|"GET /api/v1/search?q=..."| Search
+    JS -->|"GET /api/v1/digest"| Digest
+    JS -->|"GET /api/v1/reviews/upcoming?days=N"| Reviews
+```
+
+The new `/api/v1/reviews/upcoming?days=N` endpoint returns pending reviews
+for the strictly-future window `(today, today + days]` bucketed by
+`scheduled_date`. It never overlaps with `/digest` (which is "due today or
+earlier"). The endpoint inherits the authenticated rate-limit policy from
+the aggregator.
+
+### Required manual evidence for SRA-701
+
+| Ticket | Run against real components | Observable success | Failure/recovery check |
+|---|---|---|---|
+| SRA-701 | Sign in with one or two captures already on disk; open `/dashboard` | Total entries / Due today / Upcoming tiles match direct `curl` calls; search filters in real time; expanding an entry reveals its original transcript; switching the window `<select>` re-renders the timeline without a reload | Private-window sign-in for a second user shows only their own entries and reviews; the first user's URL still scopes to whoever is signed in |
+
+Each ticket's **Verification record** must contain actual outcomes before it
+closes. SRA-701's record includes the focused/integration/e2e test
+results and the lint/type-check status; manual browser verification is
+the closing step.
+
+---
+
+## Board — Phase 8 (Interactive AI interview mode)
+
+Phase 8 adds a third quiz mode alongside MCQ (`web`) and spoken-MCQ
+(`voice`): an open-ended, LLM-driven interview where the AI asks
+grounded questions, listens to the user's free-form answer, grades it
+**0–100** with feedback, and decides whether to probe deeper on the
+current topic or move to the next outline item. The user can skip ahead
+or end the attempt at any time. The nightly pregeneration job produces
+an `InterviewPlan` per `QuizSet`; the per-turn conversation graph
+expands one outline item at a time and persists every `ai` / `user` /
+`system_summary` row to the `interview_turns` table. Both the dashboard
+and the macOS voice client consume the same SRA-805 routes.
+
+| Ticket | Title | Blocked by | Status |
+|---|---|---|---|
+| [SRA-801](SRA-801-interview-schema-and-migration.md) | Interview schema and safe migration | SRA-509 | Planned |
+| [SRA-802](SRA-802-interview-planner-and-pregen.md) | Interview planner agent and pregeneration | SRA-801 | Planned |
+| [SRA-803](SRA-803-interview-conversation-graph.md) | Interview conversation graph (per-turn agent) | SRA-801 | Planned |
+| [SRA-804](SRA-804-interview-repository-helpers.md) | Interview repository helpers | SRA-801, SRA-802, SRA-803 | Planned |
+| [SRA-805](SRA-805-interview-router-endpoints.md) | Interview router endpoints | SRA-804, SRA-806 | Planned |
+| [SRA-806](SRA-806-interview-api-schemas.md) | Interview API schemas (DTOs) | SRA-801, SRA-803 | Planned |
+| [SRA-807](SRA-807-interview-dashboard-ui.md) | Interview dashboard UI | SRA-805 | Planned |
+| [SRA-808](SRA-808-interview-voice-client-and-tts.md) | Interview voice client and TTS integration | SRA-805 | Planned |
+| [SRA-809](SRA-809-phase-8-integration-verification.md) | Phase 8 integration verification | SRA-805, SRA-807, SRA-808 | Planned |
+
+Suggested order, and what each step gives you to run:
+
+1. **801** — upgrade a real Phase 5/6 database with the two new tables
+   (`interview_plans`, `interview_turns`), the `QuizAttempt.cursor_on_plan`
+   column, and the two new `users` preference columns, and prove every
+   pre-existing row survives a downgrade and a subsequent upgrade.
+2. **802** — pre-generate an `InterviewPlan` outline per `QuizSet` via
+   the new planner LangGraph; pregen creates the outline idempotently and
+   the dev pregen summary surfaces the new counters.
+3. **803** — drive one HTTP turn of the conversation: interpret the
+   user's free-form answer, grade 0–100, decide the next action, persist
+   every `ai` / `user` / `system_summary` row, advance or finalize the
+   attempt. State is reloaded from the DB on every turn.
+4. **804** — add the five repository helpers (`create_interview_plan`,
+   `get_or_create_interview_plan`, `append_interview_turn`,
+   `get_interview_turns`, `complete_interview_attempt`) so the graph
+   never speaks SQL directly and the cascade from `quiz_sets` /
+   `quiz_attempts` covers the new tables.
+5. **806** — define the wire DTOs the dashboard and voice client
+   consume; extend `PreferencesIn` / `PreferencesOut` and
+   `StartAttemptRequest.mode` (adds `"interview"`).
+6. **805** — wire the three HTTP routes: the `interview` branch in
+   `POST /quiz/{id}/attempts`, `POST /quiz/attempts/{id}/interview-turn`,
+   and `GET /quiz/attempts/{id}/interview`. All three inherit the
+   per-user rate-limit bucket.
+7. **807** — render the chat-thread dashboard with score chips, action
+   buttons, the summary panel, and the resume fetch on page load.
+8. **808** — drive the same conversation through the macOS client:
+   `speak(question)` → `record_audio()` → `transcribe()` → POST
+   `action="answer"` → `speak(feedback)` → `speak(next_question)`.
+9. **809** — re-run the full suite, the migration round-trip, the
+   rate-limit inheritance, the dashboard loop, the voice loop, the
+   resume flow, and the recovery flow, then record the phase-level
+   evidence.
+
+```mermaid
+flowchart LR
+  509[SRA-509 Phase 5 verified] --> 801[SRA-801 Schema + migration]
+  801 --> 802[SRA-802 Planner + pregen]
+  801 --> 803[SRA-803 Conversation graph]
+  802 --> 804[SRA-804 Repository helpers]
+  803 --> 804
+  801 --> 806[SRA-806 API schemas]
+  803 --> 806
+  804 --> 805[SRA-805 Router endpoints]
+  806 --> 805
+  805 --> 807[SRA-807 Dashboard UI]
+  805 --> 808[SRA-808 Voice client]
+  807 --> 809[SRA-809 Phase verification]
+  808 --> 809
+```
+
+### How the Phase 8 files work together
+
+At runtime, the SRA-502 scheduler pre-generates today's MCQ `QuizSet`
+**and** an `InterviewPlan` outline per `QuizSet` (SRA-802). The
+dashboard's "Start interview" button (SRA-807) calls
+`POST /api/v1/quiz/{id}/attempts {mode: "interview"}` (SRA-805), which
+loads the plan through `get_or_create_interview_plan` (SRA-804) and
+returns the first question inline. Each subsequent typed answer calls
+`POST /quiz/attempts/{id}/interview-turn {action: "answer"}`, which
+delegates to `process_interview_turn` (SRA-803) — one LLM call per
+turn that grades the answer and produces the next question or decides
+to finish. The voice client (SRA-808) reuses the same routes with
+`speak()` for the AI's voice and `record_audio()` + `transcribe()` for
+the user's spoken answer. Every `ai` / `user` / `system_summary` row
+is persisted to `interview_turns` (SRA-801) so closing the tab and
+reopening `/dashboard/interview?attempt_id=…` reloads the full
+transcript through `GET /quiz/attempts/{id}/interview`. The database is
+the canonical owner of attempt state; no in-process state survives a
+restart.
+
+```mermaid
+flowchart LR
+  subgraph Server[FastAPI process]
+    Job["jobs/quiz_pregeneration.py<br/>pregen creates InterviewPlan"]
+    Planner["agents/interview_planner.py<br/>outline per QuizSet"]
+    Graph["agents/interview_conversation_graph.py<br/>process_interview_turn"]
+    Repo["db/repository.py<br/>append_interview_turn,<br/>get_interview_turns,<br/>complete_interview_attempt"]
+    Router["api/routers/quiz.py<br/>POST /attempts {mode: interview},<br/>POST /interview-turn, GET /interview"]
+  end
+
+  subgraph Browser[Dashboard at /dashboard/interview]
+    Page[dashboard/interview.html shell]
+    JS[dashboard/interview.js]
+    Page --> JS
+  end
+
+  subgraph Desktop[macOS client]
+    Driver["capture/voice_quiz_client.py<br/>run_interview"]
+    Speak["capture/tts.py<br/>speak()"]
+    Rec["capture/recording.py"]
+    STT["capture/transcription.py"]
+    Driver --> Speak
+    Driver --> Rec
+    Driver --> STT
+  end
+
+  subgraph DB[(SQLite/Postgres)]
+    IP[interview_plans]
+    IT[interview_turns]
+    QS[quiz_sets]
+    QA[quiz_attempts<br/>cursor_on_plan]
+  end
+
+  Job --> Planner
+  Planner --> IP
+  Router --> Repo
+  Graph --> Router
+  Repo --> IP
+  Repo --> IT
+  Repo --> QA
+  JS -->|start / answer / next / end| Router
+  JS -->|resume on reload| Router
+  Driver -->|start_interview_attempt<br/>send_interview_turn| Router
+```
+
+| Ticket / main boundary | Input → output | Responsibility added |
+|---|---|---|
+| [801 — schema](SRA-801-interview-schema-and-migration.md) | Phase 5/6 database → Phase 8 database with two new tables, one new `quiz_attempts` column, two new `users` preference columns | Durable plans, transcript log, ownership boundaries, and per-attempt turn cap. |
+| [802 — planner + pregen](SRA-802-interview-planner-and-pregen.md) | One entry + count → persisted `InterviewPlan` with a structured outline | Generate outline drafts with structured output and idempotent per-day persistence; surface `interview_plans_created / skipped / errored` counts. |
+| [803 — conversation graph](SRA-803-interview-conversation-graph.md) | One HTTP turn → next question or final summary | One LLM call per turn that grades the user's free-form answer and decides the next action; persist every turn; force-stop at `max_turns=20`. |
+| [804 — repository](SRA-804-interview-repository-helpers.md) | DB session + typed args → typed rows | Typed insert / read / cascade for `interview_plans` and `interview_turns`; no other module speaks SQL to the new tables. |
+| [805 — router](SRA-805-interview-router-endpoints.md) | Authenticated request → interview lifecycle HTTP responses | Enforce ownership; map typed errors to `400 / 403 / 404 / 409 / 422 / 429`; inherit the per-user rate-limit bucket. |
+| [806 — schemas](SRA-806-interview-api-schemas.md) | DTO definitions | Wire shape for the interview surface; extend `PreferencesIn` / `PreferencesOut` and `StartAttemptRequest.mode`. |
+| [807 — dashboard](SRA-807-interview-dashboard-ui.md) | Click → answer → summary | Chat-thread UI with score chips, action buttons, summary panel, and resume fetch on page load. |
+| [808 — voice client](SRA-808-interview-voice-client-and-tts.md) | `quiz_set_id` → `{score, answered_count, remaining_count}` | Compose recorder + transcriber + `speak()` + the three new client methods into one function. |
+| [809 — verification](SRA-809-phase-8-integration-verification.md) | Phase 8 components → recorded evidence | Migration round-trip, full suite, web loop, voice loop, resume, recovery, lint/types. |
+
+The `dev_pregenerate_now` route, the `GET /digest/ready` endpoint, the
+`wakeup_notification_sent_at` flag, the TTS module, the recorder, the
+transcriber, and the macOS menu-bar app are not changed by Phase 8 —
+the interview feature reuses them as-is. The voice-quiz `voice` mode
+remains the only spoken path for MCQ; interview mode is the only
+spoken path for the open-ended interview. Both share the same rate-limit
+bucket and the same auth flow.
+
+### Required manual evidence for Phase 8
+
+| Ticket | Run against real components | Observable success | Failure/recovery check |
+|---|---|---|---|
+| SRA-801 | `alembic upgrade head` from `d4e5f6a7b8c9` then `downgrade -1` then `upgrade head` | Two new tables appear, the new `users` columns appear with defaults, the new `quiz_attempts` column appears with `server_default=0`; pre-Phase-8 rows keep their IDs | Restore backup; rerun the migration |
+| SRA-802 | Real OpenAI call | `InterviewPlan` row with an outline of `interview_question_count` items, each with `subtopic`, `difficulty`, `focus_prompt` | A second pregen call the same day raises on the unique constraint, no duplicate |
+| SRA-803 | Real OpenAI call | One `interview_turns` row per AI / user / system_summary message; `score` integer in `[0, 100]`; `next_action` is one of `ask_new` / `follow_up` / `finish` | LLM failure raises `InterviewLLMError`; the 21st `answer` raises `InterviewAttemptFullError` |
+| SRA-804 | Real database | `create_interview_plan` is idempotent; `delete_user_cascade` removes every `interview_plans` and `interview_turns` row owned by the user | Restore backup; rerun the cascade check |
+| SRA-805 | `curl` against a running server with a real token | Start / answer / next / end / GET return documented shapes; the second user's token gets `403`; missing token gets `401`; rate-limit burst gets `429` | Wrong mode returns `400`; already-completed returns `409`; full attempt returns `409` |
+| SRA-806 | OpenAPI spec at `/api/v1/openapi.json` | Every new DTO appears with the documented field names; `StartAttemptRequest.mode` enum contains `"interview"`; `PreferencesIn` carries the two new fields | A round-trip through `model_validate(model_dump())` is the regression test |
+| SRA-807 | Browser signed in as the user | Chat thread renders without a console error; score chip appears under each user bubble; action buttons enable / disable correctly; summary panel shows `score`, `answered_count`, `remaining_count`; resume fetch renders the existing transcript | Network panel shows zero pre-answer leaks; private-window second user sees only their own interviews |
+| SRA-808 | macOS client with a real OpenAI key | TTS sequence matches the documented question / feedback / next-question / summary order; recorder / transcriber close on stop; menu-bar status updates with the saved score | Network error surfaces a clean message; resuming after the network returns shows the same transcript |
+| SRA-809 | Full suite + manual evidence replay | All focused, integration, and e2e tests pass; Phase 1–7 regressions stay green; lint and types clean | The Phase 4 limitation count matches the SRA-406 baseline |
+
+Each ticket's **Verification record** must contain actual outcomes
+before it closes. A passing unit test for one model validator, an
+empty grep, or a to-be-filled-in URL are not sufficient. SRA-809
+re-runs the complete interview lifecycle; earlier tickets must already
+have their own evidence.
+
+---
+
 ## Running the app
 
 ```bash
 cd /Users/shubhamsingh/Documents/cells/spaced-repetition-agent
 source .venv/bin/activate          # venv already created; see README.md if missing
-cp .env.example .env               # first time only, then fill in OPENAI_API_KEY
+cp -i .env.example .env               # first time only, then fill in OPENAI_API_KEY
 uvicorn sra.api.app:create_app --factory --reload --port 8000
 ```
 

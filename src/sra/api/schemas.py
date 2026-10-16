@@ -4,9 +4,16 @@ from datetime import date, datetime
 from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
-from sra.db.models import MAX_OPTION_COUNT, MAX_QUESTION_COUNT
+from sra.db.models import (
+    MAX_INTERVIEW_QUESTION_COUNT,
+    MAX_INTERVIEW_TARGET_MINUTES,
+    MAX_OPTION_COUNT,
+    MAX_QUESTION_COUNT,
+    MIN_INTERVIEW_QUESTION_COUNT,
+    MIN_INTERVIEW_TARGET_MINUTES,
+)
 
 _REVIEW_TIME_PATTERN = r"^([01][0-9]|2[0-3]):[0-5][0-9]$"
 
@@ -69,7 +76,9 @@ class QuizSetOut(BaseModel):
 
 
 class StartAttemptRequest(BaseModel):
-    mode: Literal["web", "voice"]
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["web", "voice", "interview"]
 
 
 class SubmitAnswerRequest(BaseModel):
@@ -111,6 +120,7 @@ class QuizAttemptOut(BaseModel):
     completed_at: datetime | None
     score: int | None
     total_questions: int
+    cursor_on_plan: int = 0
 
 
 class PreferencesIn(BaseModel):
@@ -127,6 +137,8 @@ class PreferencesIn(BaseModel):
     timezone: str
     quiz_question_count: int
     quiz_option_count: int
+    interview_question_count: int | None = None
+    interview_target_minutes: int | None = None
     wakeup_notification_sent_at: datetime | None = None
 
     @field_validator("preferred_review_time")
@@ -167,6 +179,30 @@ class PreferencesIn(BaseModel):
             )
         return value
 
+    @field_validator("interview_question_count")
+    @classmethod
+    def _check_interview_question_count(cls, value: int | None) -> int | None:
+        if value is None:
+            return value
+        if value < MIN_INTERVIEW_QUESTION_COUNT or value > MAX_INTERVIEW_QUESTION_COUNT:
+            raise ValueError(
+                f"interview_question_count must be between "
+                f"{MIN_INTERVIEW_QUESTION_COUNT} and {MAX_INTERVIEW_QUESTION_COUNT}"
+            )
+        return value
+
+    @field_validator("interview_target_minutes")
+    @classmethod
+    def _check_interview_target_minutes(cls, value: int | None) -> int | None:
+        if value is None:
+            return value
+        if value < MIN_INTERVIEW_TARGET_MINUTES or value > MAX_INTERVIEW_TARGET_MINUTES:
+            raise ValueError(
+                f"interview_target_minutes must be between "
+                f"{MIN_INTERVIEW_TARGET_MINUTES} and {MAX_INTERVIEW_TARGET_MINUTES}"
+            )
+        return value
+
 
 class PreferencesOut(BaseModel):
     """GET /api/v1/me/preferences response body.
@@ -180,4 +216,90 @@ class PreferencesOut(BaseModel):
     timezone: str
     quiz_question_count: int
     quiz_option_count: int
+    interview_question_count: int
+    interview_target_minutes: int
     wakeup_notification_sent_at: datetime | None
+
+
+def _strip_and_require_str(value: str) -> str:
+    stripped = value.strip()
+    if not stripped:
+        raise ValueError("must not be empty")
+    return stripped
+
+
+class InterviewOutlineItemOut(BaseModel):
+    subtopic: str
+    difficulty: Literal["easy", "medium", "hard"]
+    focus_prompt: str
+
+    @field_validator("subtopic", "focus_prompt")
+    @classmethod
+    def _strip_and_require(cls, value: str) -> str:
+        return _strip_and_require_str(value)
+
+
+class InterviewPlanOut(BaseModel):
+    id: int
+    quiz_set_id: int
+    outline: list[InterviewOutlineItemOut]
+    target_questions: int
+    created_at: datetime
+
+
+class InterviewTurnOut(BaseModel):
+    id: int
+    role: Literal["ai", "user", "system_summary"]
+    content: str
+    score: int | None = None
+    outline_index: int | None = None
+    created_at: datetime
+
+
+class InterviewSummaryOut(BaseModel):
+    score: int
+    answered_count: int
+    remaining_count: int
+    summary_text: str
+
+
+class InterviewTurnRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["start", "answer", "next", "end"]
+    answer_text: str | None = None
+
+    @field_validator("answer_text")
+    @classmethod
+    def _strip_answer_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("answer_text must not be empty")
+        return stripped
+
+    @model_validator(mode="after")
+    def _require_answer_text_for_answer(self) -> "InterviewTurnRequest":
+        if self.action == "answer":
+            if not self.answer_text or not self.answer_text.strip():
+                raise ValueError("answer_text is required when action is 'answer'")
+        return self
+
+
+class InterviewTurnResponse(BaseModel):
+    question_text: str | None
+    score: int | None
+    rationale: str | None
+    feedback: str | None
+    finished: bool
+    summary: str | None
+    transcript_so_far: list[InterviewTurnOut]
+    attempt: QuizAttemptOut
+
+
+class InterviewDetailOut(BaseModel):
+    plan: InterviewPlanOut
+    turns: list[InterviewTurnOut]
+    summary: InterviewSummaryOut | None
+    attempt: QuizAttemptOut

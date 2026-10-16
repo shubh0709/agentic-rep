@@ -1,6 +1,6 @@
 """SRA-501 — User preferences columns, repository helpers, and schemas."""
 
-# pyright: reportAttributeAccessIssue=false, reportArgumentType=false, reportOptionalMemberAccess=false
+# pyright: reportAttributeAccessIssue=false, reportArgumentType=false, reportOptionalMemberAccess=false, reportCallIssue=false, reportGeneralTypeIssues=false
 
 from datetime import UTC, datetime
 
@@ -128,6 +128,8 @@ def test_get_user_preferences_returns_defaults_for_a_fresh_user(session, seeded_
         "timezone": "UTC",
         "quiz_question_count": 10,
         "quiz_option_count": 4,
+        "interview_question_count": 6,
+        "interview_target_minutes": 5,
         "wakeup_notification_sent_at": None,
     }
 
@@ -207,6 +209,8 @@ def test_user_preferences_typed_dict_exposes_documented_keys():
         "timezone",
         "quiz_question_count",
         "quiz_option_count",
+        "interview_question_count",
+        "interview_target_minutes",
         "wakeup_notification_sent_at",
     }
 
@@ -219,6 +223,8 @@ def test_preferences_in_schema_round_trips_valid_payload():
         timezone="America/Los_Angeles",
         quiz_question_count=10,
         quiz_option_count=4,
+        interview_question_count=6,
+        interview_target_minutes=5,
     )
 
     assert payload.preferred_review_time == "07:30"
@@ -250,6 +256,8 @@ def test_preferences_in_schema_rejects_invalid_payloads(field, value):
         "timezone": "UTC",
         "quiz_question_count": 10,
         "quiz_option_count": 4,
+        "interview_question_count": 6,
+        "interview_target_minutes": 5,
     }
     base[field] = value
     with pytest.raises(ValidationError):
@@ -264,6 +272,8 @@ def test_preferences_in_schema_rejects_extra_fields():
         "timezone": "UTC",
         "quiz_question_count": 10,
         "quiz_option_count": 4,
+        "interview_question_count": 6,
+        "interview_target_minutes": 5,
         "unexpected_field": "nope",
     }
     with pytest.raises(ValidationError):
@@ -274,3 +284,87 @@ def test_user_preferences_module_invariants(session):
     """Repository: UserNotFoundError exists, prefers the canonical import path."""
     assert hasattr(repository, "UserNotFoundError")
     assert issubclass(repository.UserNotFoundError, Exception)
+
+
+# ---------------------------------------------------------------------------
+# SRA-806 — Two new ``users`` preference fields participate in the same
+# schema / repository round-trip pattern.
+# ---------------------------------------------------------------------------
+
+
+phase8 = pytest.mark.phase8  # noqa: E402  -- marker alias below the Phase 5 marker
+
+
+@phase8
+def test_user_has_interview_question_count_default_six():
+    user = _make_user()
+    assert user.interview_question_count == 6
+
+
+@phase8
+def test_user_has_interview_target_minutes_default_five():
+    user = _make_user()
+    assert user.interview_target_minutes == 5
+
+
+@phase8
+@pytest.mark.parametrize("count", [3, 6, 12])
+def test_interview_question_count_accepts_in_range(count):
+    user = _make_user(interview_question_count=count)
+    assert user.interview_question_count == count
+
+
+@phase8
+@pytest.mark.parametrize("count", [2, 13, 99])
+def test_interview_question_count_rejects_out_of_range(count):
+    with pytest.raises(ValidationError):
+        _make_user(interview_question_count=count)
+
+
+@phase8
+@pytest.mark.parametrize("minutes", [1, 5, 20])
+def test_interview_target_minutes_accepts_in_range(minutes):
+    user = _make_user(interview_target_minutes=minutes)
+    assert user.interview_target_minutes == minutes
+
+
+@phase8
+@pytest.mark.parametrize("minutes", [0, 21, 99])
+def test_interview_target_minutes_rejects_out_of_range(minutes):
+    with pytest.raises(ValidationError):
+        _make_user(interview_target_minutes=minutes)
+
+
+@phase8
+def test_preferences_in_schema_round_trips_interview_payload():
+    from sra.api.schemas import PreferencesIn, PreferencesOut
+
+    payload = PreferencesIn(
+        preferred_review_time="07:30",
+        timezone="America/Los_Angeles",
+        quiz_question_count=10,
+        quiz_option_count=4,
+        interview_question_count=8,
+        interview_target_minutes=12,
+    )
+    assert payload.interview_question_count == 8
+    assert payload.interview_target_minutes == 12
+    out = PreferencesOut(**payload.model_dump())
+    assert out.interview_question_count == 8
+    assert out.interview_target_minutes == 12
+
+
+@phase8
+def test_preferences_in_schema_rejects_out_of_range_interview_fields():
+    from sra.api.schemas import PreferencesIn
+
+    base = {
+        "preferred_review_time": "09:00",
+        "timezone": "UTC",
+        "quiz_question_count": 10,
+        "quiz_option_count": 4,
+    }
+    with pytest.raises(ValidationError):
+        PreferencesIn(**base, interview_question_count=2)
+    with pytest.raises(ValidationError):
+        PreferencesIn(**base, interview_target_minutes=21)

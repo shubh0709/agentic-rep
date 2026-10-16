@@ -44,6 +44,10 @@ def _utcnow_date() -> date:
 
 MAX_QUESTION_COUNT = 20
 MAX_OPTION_COUNT = 6
+MIN_INTERVIEW_QUESTION_COUNT = 3
+MAX_INTERVIEW_QUESTION_COUNT = 12
+MIN_INTERVIEW_TARGET_MINUTES = 1
+MAX_INTERVIEW_TARGET_MINUTES = 20
 
 _REVIEW_TIME_PATTERN = r"^([01][0-9]|2[0-3]):[0-5][0-9]$"
 
@@ -73,6 +77,14 @@ class UserBase(SQLModel):
     quiz_option_count: int = Field(
         default=4,
         sa_column=Column(Integer, nullable=False, server_default="4"),
+    )
+    interview_question_count: int = Field(
+        default=6,
+        sa_column=Column(Integer, nullable=False, server_default="6"),
+    )
+    interview_target_minutes: int = Field(
+        default=5,
+        sa_column=Column(Integer, nullable=False, server_default="5"),
     )
     is_demo_user: bool = False  # SRA-601: marker used by the demo reset job (SRA-603)
 
@@ -114,6 +126,26 @@ class UserBase(SQLModel):
             )
         return value
 
+    @field_validator("interview_question_count")
+    @classmethod
+    def validate_interview_question_count(cls, value: int) -> int:
+        if value < MIN_INTERVIEW_QUESTION_COUNT or value > MAX_INTERVIEW_QUESTION_COUNT:
+            raise ValueError(
+                f"interview_question_count must be between "
+                f"{MIN_INTERVIEW_QUESTION_COUNT} and {MAX_INTERVIEW_QUESTION_COUNT}"
+            )
+        return value
+
+    @field_validator("interview_target_minutes")
+    @classmethod
+    def validate_interview_target_minutes(cls, value: int) -> int:
+        if value < MIN_INTERVIEW_TARGET_MINUTES or value > MAX_INTERVIEW_TARGET_MINUTES:
+            raise ValueError(
+                f"interview_target_minutes must be between "
+                f"{MIN_INTERVIEW_TARGET_MINUTES} and {MAX_INTERVIEW_TARGET_MINUTES}"
+            )
+        return value
+
 
 class UserCreate(UserBase):
     """What a caller may supply to create a User -- no id or created_at.
@@ -145,6 +177,10 @@ class User(UserBase, table=True):
         CheckConstraint(
             "quiz_question_count BETWEEN 1 AND 20 AND quiz_option_count BETWEEN 2 AND 6",
             name="ck_users_quiz_counts_positive",
+        ),
+        CheckConstraint(
+            "interview_question_count BETWEEN 3 AND 12 AND interview_target_minutes BETWEEN 1 AND 20",
+            name="ck_users_interview_preferences_in_range",
         ),
         CheckConstraint(
             "is_demo_user IN (0, 1)",
@@ -297,6 +333,7 @@ class QuizAttempt(QuizAttemptBase, table=True):
     completed_at: datetime | None = None
     score: int | None = None
     cursor: int = 0
+    cursor_on_plan: int = Field(default=0, sa_column=Column(Integer, nullable=False, server_default="0"))
 
 
 class QuizAnswerBase(SQLModel):
@@ -320,3 +357,63 @@ class QuizAnswer(QuizAnswerBase, table=True):
 
     id: int | None = Field(default=None, primary_key=True)
     answered_at: datetime = Field(default_factory=_utcnow)
+
+
+class InterviewPlanBase(SQLModel):
+    quiz_set_id: int = Field(foreign_key="quiz_sets.id", unique=True)
+    outline: list[dict] = Field(default_factory=list, sa_column=Column(JSON, nullable=False, server_default="[]"))
+    target_questions: int
+
+
+class InterviewPlanCreate(InterviewPlanBase):
+    """What a caller may supply to create an InterviewPlan -- no id or created_at."""
+
+    model_config = {"extra": "forbid"}
+
+
+class InterviewPlan(InterviewPlanBase, table=True):
+    __tablename__ = "interview_plans"  # pyright: ignore[reportAssignmentType]
+
+    id: int | None = Field(default=None, primary_key=True)
+    created_at: datetime = Field(default_factory=_utcnow)
+
+
+class InterviewTurnRole(StrEnum):
+    """String roles persisted on ``InterviewTurn`` rows.
+
+    Mirrors the ``ck_interview_turns_role`` CHECK constraint on the
+    ``interview_turns`` table. The repository helper validates every
+    insert against this enum so a typo can never produce a row that
+    fails the constraint on commit.
+    """
+
+    AI = "ai"
+    USER = "user"
+    SYSTEM_SUMMARY = "system_summary"
+
+
+class InterviewTurnBase(SQLModel):
+    attempt_id: int = Field(foreign_key="quiz_attempts.id", index=True)
+    role: str
+    content: str
+    score: int | None = None
+    outline_index: int | None = None
+
+
+class InterviewTurnCreate(InterviewTurnBase):
+    """What a caller may supply to create an InterviewTurn -- no id or created_at."""
+
+    model_config = {"extra": "forbid"}
+
+
+class InterviewTurn(InterviewTurnBase, table=True):
+    __tablename__ = "interview_turns"  # pyright: ignore[reportAssignmentType]
+    __table_args__ = (
+        CheckConstraint(
+            "role IN ('ai', 'user', 'system_summary')",
+            name="ck_interview_turns_role",
+        ),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    created_at: datetime = Field(default_factory=_utcnow)

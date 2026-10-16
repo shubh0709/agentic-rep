@@ -45,6 +45,8 @@ class UserPreferences(TypedDict):
     timezone: str
     quiz_question_count: int
     quiz_option_count: int
+    interview_question_count: int
+    interview_target_minutes: int
     wakeup_notification_sent_at: datetime | None
 
 
@@ -65,6 +67,8 @@ def get_user_preferences(user_id: int, session: Session) -> UserPreferences:
         "timezone": user.timezone,
         "quiz_question_count": user.quiz_question_count,
         "quiz_option_count": user.quiz_option_count,
+        "interview_question_count": user.interview_question_count,
+        "interview_target_minutes": user.interview_target_minutes,
         "wakeup_notification_sent_at": user.wakeup_notification_sent_at,
     }
 
@@ -95,6 +99,10 @@ def update_user_preferences(
         user.quiz_question_count = prefs["quiz_question_count"]
     if "quiz_option_count" in prefs:
         user.quiz_option_count = prefs["quiz_option_count"]
+    if "interview_question_count" in prefs:
+        user.interview_question_count = prefs["interview_question_count"]
+    if "interview_target_minutes" in prefs:
+        user.interview_target_minutes = prefs["interview_target_minutes"]
 
     session.add(user)
     session.commit()
@@ -105,6 +113,8 @@ def update_user_preferences(
         "timezone": user.timezone,
         "quiz_question_count": user.quiz_question_count,
         "quiz_option_count": user.quiz_option_count,
+        "interview_question_count": user.interview_question_count,
+        "interview_target_minutes": user.interview_target_minutes,
         "wakeup_notification_sent_at": user.wakeup_notification_sent_at,
     }
 

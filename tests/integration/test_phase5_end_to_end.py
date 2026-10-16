@@ -127,6 +127,8 @@ def test_phase5_end_to_end_drives_a_full_voice_quiz_after_preferences_and_pregen
             "timezone": "UTC",
             "quiz_question_count": 3,
             "quiz_option_count": 4,
+            "interview_question_count": 6,
+            "interview_target_minutes": 5,
         },
     )
     assert preferences_response.status_code == 200
@@ -225,6 +227,8 @@ def test_phase5_end_to_end_cross_user_isolation(monkeypatch, client, session, se
             "timezone": "UTC",
             "quiz_question_count": 5,
             "quiz_option_count": 4,
+            "interview_question_count": 6,
+            "interview_target_minutes": 5,
         },
     )
     assert other_preferences_put.status_code == 200
