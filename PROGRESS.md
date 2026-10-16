@@ -200,3 +200,129 @@ application credential. Wake-up/TTS/voice quiz remain Phase 5.
 ## SRA-807 implementation — 2026-10-15
 
 - **SRA-807 implementation — 2026-10-15:** added the browser-side interview dashboard on top of the SRA-805 routes and SRA-806 wire DTOs. Replaced the `interview.js` stub with a 651-line implementation that copies the `el` / `clearChildren` / `statusPanel` / `statusTitle` / `friendlyDetail` / `handleErrorStatus` helpers from `quiz.js` verbatim, adds the `appendChild` shim that picks `parent.appendChild(...)` when present and falls back to `parent.children.push(child)` (so the same code runs in real browsers and in the Node-driven test harness with a fake root that only exposes a `children` array), and exports the `initInterview(root, doc, options?)` entry point on `globalThis.initInterview` plus the `sraInterview` object API (`initInterview`, `startInterview`, `sendAnswer`, `sendNext`, `sendEnd`, `resumeInterview`, `renderThread`, `renderSummary`, `renderInputArea`, `state`, `ready`). Renderers build the chat thread with AI bubbles left + user bubbles right + a `data-field="score"` chip under each user bubble + a `data-field="next-question"` AI bubble when the response carries a `question_text`; `renderSummary` builds a panel with `score` / `answered_count` / `remaining_count` / `summary_text` plus a "Back to dashboard" link; `renderInputArea` builds the textarea, "Send answer" / "Next question" / "End interview" buttons, and disables itself when `finished=true`. Actions call the SRA-805 routes with `credentials: "same-origin"` and the typed body shape the server expects: `startInterview` → `POST /api/v1/quiz/{id}/attempts {mode: "interview"}`, `sendAnswer` / `sendNext` / `sendEnd` → `POST /api/v1/quiz/attempts/{id}/interview-turn` with `{action, answer_text?}`, `resumeInterview` → `GET /api/v1/quiz/attempts/{id}/interview`. The `initInterview` entry point reads `quiz_set_id` / `attempt_id` from `options` first, then from `globalThis.location.search` (so `/dashboard/interview?quiz_set_id=X` and `/dashboard/interview?attempt_id=Y` both work), then renders a 400 status panel if neither is provided. Added `web/routes.py::interview_page` (returns the static `interview.html` via a small `_read_static_file` helper so the page keeps the same `require_user` + `limit_authenticated` dependencies as the other protected pages) and mounted `dashboard/static/` at `/dashboard-static` so the page shell's `<script type="module" src="/dashboard-static/interview.js">` resolves in production. Extended `dashboard/static/quiz.js::renderTodayList` to render a second `data-action="start-interview"` button inside a `data-field="actions"` span so the existing `data-action="start"` MCQ button keeps its selector. Updated `dashboard/static/quiz.html` and `dashboard/static/interview.html` to load their sibling modules from the new `/dashboard-static/` path. `dashboard/README.md` now documents the interview page, the resume flow (with the `attempt_id` query parameter), and the SRA-805 endpoints the dashboard consumes. **`pytest tests/unit/test_interview_dashboard.py -v` → 7 passed** (smoke load, `calls` shape on the create-attempt POST, the score chip + next-question render after an answer response, the summary panel after a finished response, the 401 + 429 status panels with the server's `detail`, and the 400 wrong-mode response). **`pytest tests/e2e/test_phase8_interview_dashboard_e2e.py -v` → 2 passed** (the real `create_app()` end-to-end through `start → 2 answers → next → answer → end → GET /interview` and the `interview.js`-loads-as-a-Node-module smoke test). **`pytest -m 'not phase8' -q --ignore=tests/unit/test_auth_refresh.py --ignore=tests/integration/test_init_db.py` → 785 passed / 24 failed / 14 skipped / 153 deselected** (24 failures identical to the SRA-805 / SRA-806 / SRA-808 baseline; no new regressions). **`ruff check .` clean**. **`pyright` errors unchanged from SRA-808 (10 pre-existing, 0 new)**. **Deviations:** (1) The pre-written `tests/unit/test_interview_dashboard.py` driver was a sync script that dumped the DOM right after `initInterview(root, doc)` returned — Node drains microtasks at the end of a tick, so the async fetch chains never had a chance to render. The driver was updated to call `initInterview(root, doc, { quiz_set_id: "42", auto_advance: true })` and defer the `console.log(dump(root))` inside a `setImmediate(...)` callback so the dump fires after the microtask queue has settled; the new `auto_advance` option (a test-only hook) makes `initInterview` chain a `sendAnswer(attemptId, options.auto_advance_text || "answer")` after the start response so multi-response tests can exercise the post-answer render in a single driver pass. The hook is `false` by default and is wired so the in-browser use case (typed answer + button click) is unaffected. (2) The test driver's fake `root` does not expose `appendChild` (only a `children` array), so the `interview.js` module installs the small `appendChild(parent, child)` shim that picks the right shape — the same shim would also unblock the `tests/unit/test_quiz_dashboard.py` driver if a follow-up ticket wants to retire those long-standing baseline failures. (3) SRA-808's `_InterviewApiClient` Protocol and the menubar's "Start interview" item are already in place but the new browser surface is the user-facing one — the two share the SRA-805 routes and the `start_interview_attempt` / `send_interview_turn` / `get_interview` client methods, and the dashboard's resume fetch on `?attempt_id=…` is the same one a follow-up voice session would call to recover a dropped call. The SRA-808 voice-client code itself is untouched.
+
+---
+
+## Application Self-Heal — 2026-10-16
+
+Ran `guides/self_heal.md` against the **master** branch on **2026-10-16**.
+The pass discovered **four confirmed application/test defects** and a
+**route-policy inventory gap**, classified the remaining
+**17 default-suite failures** against `tickets/README.md` /
+`PROGRESS.md`, and produced [`tickets/self_heal/SH-001-coverage-matrix.md`](tickets/self_heal/SH-001-coverage-matrix.md) plus
+[`tickets/self_heal/SH-REPORT.md`](tickets/self_heal/SH-REPORT.md).
+
+**Confirmed defects closed in this pass:**
+
+- **SH-002 — route-policy inventory gap.** `POST /api/v1/auth/refresh`
+  (mounted in SRA-306) was not registered in the
+  `(method, path) → policy` dict inside
+  `tests/integration/test_route_policy_audit.py`. Landed as part of
+  commit `d6f080a feat(api): implement interview router endpoints
+  (SRA-805)`, which broadened the audit to cover all Phase 8 +
+  SRA-701 dashboard routes in one sweep
+  (`/api/v1/quiz/attempts/{attempt_id}/interview-turn`,
+  `/api/v1/quiz/attempts/{attempt_id}/interview`,
+  `/api/v1/reviews/upcoming`,
+  `/api/v1/me/dev/pregenerate-now`, plus the SRA-701 SSR mounts at
+  `/`, `/signin`, `/signout`, `/quiz`, `/dashboard`,
+  `/dashboard/interview`, `/settings`, `/healthz`, and the
+  framework static at `/static`, `/dashboard-static`).
+
+- **SH-003 — digest-scheduler test time bomb.**
+  `tests/unit/test_digest_scheduler.py::_add_pending_review` persisted
+  `ReviewSchedule.scheduled_date=datetime.now(UTC).date()` while every
+  test froze `as_of_utc` to `datetime(2026, 10, 14, 9, 30, UTC)`. On
+  2026-10-14 the suite happened to pass; from 2026-10-15 onwards the
+  production filter
+  `ReviewSchedule.scheduled_date <= local_today` excludes every
+  fixture row, so `users_due_for_wakeup` returns `[]`. Closed by commit
+  `6938f95 feat(jobs): interview counters in dev upcoming pregen +
+  scheduler test fix (SRA-802 follow-up)`, which added an explicit
+  `scheduled_date` parameter and eight call-site updates so every test
+  controls its own clock. Production code is unchanged.
+
+- **SH-004 — `dev.py` `PregenerationSummary` violated its declared
+  shape.** `_generate_for_upcoming_entries` and the
+  `include_upcoming=true` merge in `pregenerate_now` omitted the
+  three `interview_plans_*` counters, silently dropping every
+  `InterviewPlan` the natural pregen pass produced under SRA-802.
+  Pyright flagged two errors at `dev.py:52:37` and `:178:40`. Closed
+  by the same commit `6938f95`.
+
+- **SH-005 — `MemoryCredentialStore` test fake missing `save_pair`.**
+  `tests/unit/test_auth_client.py` declared `load` / `save` / `delete`
+  only; the SRA-306 `CredentialStore` protocol added `save_pair`,
+  leaving pyright with eight `MemoryCredentialStore is incompatible
+  with protocol "CredentialStore"` errors. Closed by commit
+  `2d33a4e test(auth): pin CredentialStore.save_pair test double
+  (SRA-306 follow-up)`, which adds the matching method (and a
+  `pair_saves` inspection list).
+
+**Net test/lint delta:**
+
+| Metric | Before | After | Δ |
+|---|---|---|---|
+| `pytest -q` pass | 962 | 970 | +8 |
+| `pytest -q` fail | 25 | 17 | −8 |
+| `pytest -q` skip | 26 | 26 | 0 |
+| `ruff check .` errors | 10 | 8 | −2 |
+| `pyright` errors | 16 | 4 | −12 |
+
+All eight remaining `ruff` errors and four remaining `pyright` errors
+live in `tests/playwright/` and the Phase 8 suffix of
+`tests/unit/test_quiz_pregeneration.py` — user WIP files preserved
+per `guides/self_heal.md` §"Operating rules".
+
+**Remaining 17 default-suite failures (all classified; none actionable
+in this pass):**
+
+| Count | Failure(s) | Reference |
+|---|---|---|
+| 1 | `tests/unit/test_wakeup.py::test_run_wakeup_loop_survives_a_per_iteration_exception` (caplog fixture leaks across files in `pytest -q`) | SRA-509 known limitation |
+| 1 | `tests/unit/test_digest_scheduler.py::test_users_due_for_wakeup_skips_and_logs_bad_timezone_user` (same SRA-509 quirk; passes standalone) | SRA-509 known limitation |
+| 7 | `tests/unit/test_quiz_dashboard.py::test_*` (Node harness hard-codes `PATH = "/usr/bin:/usr/local/bin"`; this machine has `node` at `/opt/homebrew/bin/node`; async-DOM timing) | SRA-405 documented |
+| 1 | `tests/unit/test_interview_planner.py::test_generate_interview_outline_raises_quiz_generation_error_on_llm_failure` | Phase 8 WIP (SRA-804) |
+| 1 | `tests/integration/test_init_db.py::test_reset_db_repairs_an_inconsistent_database` | Phase 8 migration chain WIP |
+| 1 | `tests/integration/test_phase3_migration.py::test_upgrade_preserves_phase2_data_and_supports_explicit_legacy_link` | Phase 8 migration chain WIP |
+| 1 | `tests/e2e/test_phase4_web_quiz_e2e.py::test_phase4_web_quiz_e2e_returns_401_without_authentication` | SRA-406 documented |
+| 3 | `tests/integration/test_phase4_end_to_end.py::test_phase4_end_to_end_*` | SRA-406 documented |
+| 1 | `tests/e2e/test_quiz_web_e2e.py::test_quiz_web_loop_through_real_router` (test seeds entry without `repository.create_entry`) | SRA-404 known |
+
+**Files added by this pass:**
+
+```
+tickets/self_heal/SH-001-coverage-matrix.md      76 lines
+tickets/self_heal/SH-002-route-audit-refresh.md  44 lines
+tickets/self_heal/SH-003-scheduler-test-time-bomb.md  57 lines
+tickets/self_heal/SH-004-dev-py-pregensummary-fields.md  54 lines
+tickets/self_heal/SH-005-memory-store-save-pair.md  49 lines
+tickets/self_heal/SH-REPORT.md                 130 lines
+```
+
+**Reproduce the post-fix run:**
+
+```bash
+source .venv/bin/activate
+pytest tests/integration/test_route_policy_audit.py -v   # SH-002 focused
+pytest tests/unit/test_digest_scheduler.py -v          # SH-003 focused
+pytest tests/unit/test_dev_pregenerate_route.py -v     # SH-004 focused
+pytest tests/unit/test_auth_client.py -v              # SH-005 focused
+pytest -q                                              # default suite
+```
+
+Expected: `17 failed, 970 passed, 26 skipped` on the day the run
+finishes; the 17 documented limitations remain stable across future
+runs and do not regress.
+
+**Honest scope statement (per `guides/self_heal.md` §9):**
+
+This pass did not extend the application beyond the four defects it
+named. The Phase 8 interview stack (SRA-802 / 804 / 805 / 806 / 807 /
+808 / 809) is intentionally incomplete; manual checks for real Google
+OAuth, macOS Keychain, global-hotkey delivery, microphone capture, and
+two-account isolation are still required before Phase 8 can close and
+none of them was attempted in this environment. The application's
+remaining failures are not silently masked with `xfail` or assertions
+expecting `NotImplementedError` — every one of them surfaces in the
+default suite and is classified in `SH-REPORT.md`.
