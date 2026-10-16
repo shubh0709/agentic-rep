@@ -30,7 +30,7 @@ def test_ingest_returns_and_persists_valid_topics_with_reviews(client, monkeypat
     assert body[1]["subtopic"] is None
     assert body[1]["tags"] == []
     for entry in body:
-        assert set(entry) == {"id", "topic", "subtopic", "tags", "summary", "created_at"}
+        assert set(entry) == {"id", "topic", "subtopic", "tags", "summary", "raw_transcript", "created_at"}
         assert isinstance(entry["id"], int)
         assert entry["created_at"]
 

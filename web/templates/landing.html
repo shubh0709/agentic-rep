@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block title %}Spaced Repetition Agent &mdash; remember what you learn{% endblock %}
+{% block content %}
+<section class="hero">
+  <h1>Remember what you learn.</h1>
+  <p class="lede">
+    A self-hosted study companion that turns notes and voice captures into
+    daily review quizzes, so spaced repetition runs in the background while
+    you focus on the work.
+  </p>
+  {% if current_user %}
+    <p class="cta-row">
+      <a class="button primary" href="/dashboard">Open dashboard</a>
+      <a class="button" href="/quiz">Start today's quiz</a>
+      <a class="button" href="/settings">Adjust preferences</a>
+    </p>
+  {% else %}
+    <p class="cta-row">
+      {% if auth_configured %}
+        <a class="button primary" href="{{ google_login_url }}">Sign in with Google</a>
+      {% else %}
+        <span class="muted">Sign-in is not configured on this server yet.</span>
+      {% endif %}
+    </p>
+  {% endif %}
+</section>
+
+{% if current_user %}
+<section class="capture-card" aria-labelledby="capture-heading">
+  <header class="capture-header">
+    <h2 id="capture-heading">Capture a study note</h2>
+    <p class="muted">
+      Paste a transcript, type freely, or dictate with your microphone. The
+      agent extracts topics, summaries, and tags and schedules spaced reviews.
+    </p>
+  </header>
+
+  <form id="capture-form" class="stacked-form" autocomplete="off">
+    <div class="field">
+      <label for="capture-transcript">Transcript</label>
+      <textarea
+        id="capture-transcript"
+        name="transcript"
+        rows="6"
+        placeholder="e.g. Today I studied photosynthesis: the light-dependent reactions in the thylakoid membrane convert light into chemical energy..."
+        required
+      ></textarea>
+      <p class="hint muted" id="capture-record-hint">
+        Voice capture uses your browser's built-in speech recognition. It works
+        in Chrome and Safari; on Firefox, paste or type instead.
+      </p>
+    </div>
+    <div class="form-actions capture-actions">
+      <button type="button" id="capture-record" class="button" aria-pressed="false">
+        <span class="capture-record-label" data-state="idle">Record</span>
+      </button>
+      <button type="submit" id="capture-submit" class="button primary">
+        Capture
+      </button>
+      <button type="button" id="capture-clear" class="button">Clear</button>
+      <span id="capture-status" class="status" role="status" aria-live="polite"></span>
+    </div>
+  </form>
+
+  <section class="capture-results" aria-labelledby="capture-results-heading">
+    <h3 id="capture-results-heading">Saved entries</h3>
+    <p class="muted" id="capture-results-empty">
+      Nothing captured yet. Submitted notes will appear here.
+    </p>
+    <ul id="capture-results-list" class="capture-results-list" hidden></ul>
+  </section>
+</section>
+{% endif %}
+
+<section class="features">
+  <article>
+    <h2>Capture once</h2>
+    <p>Paste a transcript or dictate notes. The agent extracts topics,
+       summaries, and tags for you.</p>
+  </article>
+  <article>
+    <h2>Quiz daily</h2>
+    <p>A fresh set of multiple-choice questions is generated each morning
+       against what you actually captured.</p>
+  </article>
+  <article>
+    <h2>Stay on schedule</h2>
+    <p>Pick your review time and timezone. The agent surfaces today's set
+       and tracks what you've already completed.</p>
+  </article>
+</section>
+{% endblock %}
+{% block scripts %}
+{% if current_user %}
+<script type="module" src="{{ url_for('web-static', path='/js/landing-capture.js') }}"></script>
+{% endif %}
+{% endblock %}

@@ -249,6 +249,8 @@ self-hoster cannot accidentally invoke the destructive path.
 | `DEMO_RESET_INTERVAL_S` | `3600` | How often the demo reset job runs (seconds) |
 | `RATE_LIMIT_AUTHENTICATED_CAPACITY` | `60` | Per-user token-bucket capacity |
 | `RATE_LIMIT_ANONYMOUS_CAPACITY` | `20` | Per-IP token-bucket capacity for auth endpoints |
+| `DEV_MODE` | `false` | Enable the synchronous quiz-pregeneration dev endpoint (see [Dev affordance](#dev-affordance)) |
+| `DEV_MODE` | `false` | Enable the synchronous quiz-pregeneration dev endpoint (see [Dev affordance](#dev-affordance)) |
 
 The full list lives in [`.env.example`](.env.example).
 
@@ -554,6 +556,34 @@ with trace_agent():
 
 See the [LangGraph tracing guide](https://docs.langchain.com/langsmith/trace-with-langgraph)
 for details. No extra decorators are needed on the existing LangChain tools or models.
+
+## Dev affordance
+
+With `DEV_MODE=true` in `.env` (or the launch shell), a logged-in user can
+trigger today's quiz pregeneration synchronously without waiting for the
+4 AM UTC cron:
+
+```bash
+curl -X POST -b 'sra_session=…' \
+  'http://127.0.0.1:8000/api/v1/me/dev/pregenerate-now?include_upcoming=true'
+# {"summary": {"users": 0, "entries_seen": 3, "sets_created": 3,
+#  "sets_skipped": 0, "errors": 0}, "today": "2026-10-15",
+#  "include_upcoming": true,
+#  "quiz_sets": [{"quiz_set_id": 7, "entry_id": 12,
+#   "topic": "Mitosis", "generated_on": "2026-10-15",
+#   "question_count": 10, "option_count": 4}, …]}
+```
+
+`include_upcoming` defaults to `true` in dev so freshly-ingested entries
+(whose first review is scheduled for tomorrow) immediately get a quiz set
+dated today. Set it to `false` to keep the cron-equivalent behavior:
+generate a quiz set only for entries that already have a review due today.
+The endpoint returns `503` when `DEV_MODE=false` and never rewrites an
+already-scheduled `ReviewSchedule` row. Use it to drive the digest → quiz
+→ MCQ → attempt pipeline end to end during development, then read the
+generated MCQs through `GET /api/v1/quiz/{quiz_set_id}` or start an
+attempt through
+`POST /api/v1/quiz/{quiz_set_id}/attempts {"mode": "web"}`.
 
 ## Contributing
 

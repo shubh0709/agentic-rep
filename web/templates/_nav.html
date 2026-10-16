@@ -1,0 +1,15 @@
+{% if current_user %}
+  <nav class="site-nav" aria-label="Primary">
+    <a href="/dashboard" class="{% if active_nav == 'dashboard' %}is-active{% endif %}">Dashboard</a>
+    <a href="/quiz" class="{% if active_nav == 'quiz' %}is-active{% endif %}">Today's quiz</a>
+    <a href="/settings" class="{% if active_nav == 'settings' %}is-active{% endif %}">Settings</a>
+    <span class="who">{{ current_user.display_name }}</span>
+    <form method="post" action="/signout" class="inline-form">
+      <button type="submit" class="link-button">Sign out</button>
+    </form>
+  </nav>
+{% else %}
+  <nav class="site-nav" aria-label="Primary">
+    <a href="/signin" class="signin-link">Sign in</a>
+  </nav>
+{% endif %}

@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Spaced Repetition Agent{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('web-static', path='/css/site.css') }}">
+  {% block head_extra %}{% endblock %}
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="/">Spaced Repetition Agent</a>
+    {% include "_nav.html" %}
+  </header>
+  <main class="site-main">
+    {% block content %}{% endblock %}
+  </main>
+  <footer class="site-footer">
+    <small>Spaced Repetition Agent &middot; self-hosted study companion</small>
+  </footer>
+  {% block scripts %}{% endblock %}
+  <script src="{{ url_for('web-static', path='/js/auth-fetch.js') }}"></script>
+</body>
+</html>

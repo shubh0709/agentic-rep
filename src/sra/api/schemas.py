@@ -21,6 +21,7 @@ class EntryOut(BaseModel):
     subtopic: str | None
     tags: list[str]
     summary: str
+    raw_transcript: str
     created_at: datetime
 
 
@@ -30,6 +31,19 @@ class ReviewOut(BaseModel):
     interval_label: str
     scheduled_date: date
     status: str
+
+
+class ReviewDayOut(BaseModel):
+    """One calendar day plus the reviews scheduled for it.
+
+    Returned by ``GET /api/v1/reviews/upcoming`` so the dashboard can render a
+    day-grouped timeline without having to re-bucket the flat list itself.
+    The list of reviews is sorted by ``scheduled_date`` then ``id`` (a stable
+    proxy for insertion order) so identical dates render deterministically.
+    """
+
+    date: date
+    reviews: list[ReviewOut]
 
 
 class ChatRequest(BaseModel):

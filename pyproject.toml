@@ -17,6 +17,7 @@ dependencies = [
     "google-auth[requests]>=2.38,<3",
     "httpx>=0.27,<1",
     "apscheduler>=3.10,<4",
+    "jinja2>=3.1,<4",
 ]
 
 [project.optional-dependencies]
@@ -55,6 +56,9 @@ markers = [
     "phase3: authentication, isolation, desktop credential, and rate-limit TDD contracts",
     "phase4: daily MCQ quiz -- schema, agent, job, API, dashboard, integration verification",
     "phase5: scheduled wake-up & voice quiz -- user preferences, scheduler, TTS, voice graph, voice router, client extensions, wakeup loop, voice quiz driver",
+    "phase6: open-source packaging -- settings, Dockerfile, compose, demo reset, self-host docs, integration verification",
+    "phase7: study dashboard -- entries + search + upcoming reviews page, upcoming-reviews API, repository helpers",
+    "phase8: interactive AI interview mode -- interview schema, planner, conversation graph, repository helpers, router endpoints, API schemas, dashboard UI, voice client, integration verification",
     "whisper: opt-in real local Whisper inference",
     "desktop: requires macOS and installed desktop dependencies",
     "live_openai: explicit opt-in calls to the real OpenAI service",

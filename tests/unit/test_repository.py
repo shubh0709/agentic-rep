@@ -126,3 +126,97 @@ def test_mark_review_done_rejects_another_users_review(session, seeded_user, oth
 
     with pytest.raises(ValueError):
         repository.mark_review_done(seeded_user.id, review.id, "done", session)
+
+
+def test_list_upcoming_reviews_returns_only_pending_in_window(session, seeded_user):
+    entry = StudyEntry(user_id=seeded_user.id, topic="T", summary="s", raw_transcript="t")
+    session.add(entry)
+    session.commit()
+    session.refresh(entry)
+    assert entry.id is not None
+
+    today = date.today()
+    rows = [
+        # Outside the window: before from_date.
+        ReviewSchedule(entry_id=entry.id, interval_label="1d", scheduled_date=today, status="pending"),
+        # Inside the window.
+        ReviewSchedule(entry_id=entry.id, interval_label="3d", scheduled_date=today + timedelta(days=1), status="pending"),
+        ReviewSchedule(entry_id=entry.id, interval_label="7d", scheduled_date=today + timedelta(days=5), status="pending"),
+        # Outside the window: after to_date.
+        ReviewSchedule(entry_id=entry.id, interval_label="1mo", scheduled_date=today + timedelta(days=60), status="pending"),
+        # Inside the window but already completed.
+        ReviewSchedule(entry_id=entry.id, interval_label="3mo", scheduled_date=today + timedelta(days=20), status="done"),
+    ]
+    for row in rows:
+        session.add(row)
+    session.commit()
+
+    upcoming = repository.list_upcoming_reviews(
+        user_id=seeded_user.id,
+        from_date=today + timedelta(days=1),
+        to_date=today + timedelta(days=30),
+        session=session,
+    )
+
+    assert [r.interval_label for r in upcoming] == ["3d", "7d"]
+
+
+def test_list_upcoming_reviews_excludes_other_users_rows(session, seeded_user, other_user):
+    mine = StudyEntry(user_id=seeded_user.id, topic="Mine", summary="s", raw_transcript="t")
+    theirs = StudyEntry(user_id=other_user.id, topic="Theirs", summary="s", raw_transcript="t")
+    session.add(mine)
+    session.add(theirs)
+    session.commit()
+    session.refresh(mine)
+    session.refresh(theirs)
+    assert mine.id is not None and theirs.id is not None
+
+    today = date.today()
+    mine_review = ReviewSchedule(
+        entry_id=mine.id, interval_label="3d",
+        scheduled_date=today + timedelta(days=1), status="pending",
+    )
+    their_review = ReviewSchedule(
+        entry_id=theirs.id, interval_label="3d",
+        scheduled_date=today + timedelta(days=1), status="pending",
+    )
+    session.add(mine_review)
+    session.add(their_review)
+    session.commit()
+
+    upcoming = repository.list_upcoming_reviews(
+        user_id=seeded_user.id,
+        from_date=today,
+        to_date=today + timedelta(days=30),
+        session=session,
+    )
+
+    assert [r.interval_label for r in upcoming] == ["3d"]
+    assert all(r.entry_id == mine.id for r in upcoming)
+
+
+def test_count_user_entries_returns_zero_for_new_user(session, seeded_user):
+    assert repository.count_user_entries(seeded_user.id, session) == 0
+
+
+def test_count_user_entries_reflects_persisted_rows(session, seeded_user):
+    for i in range(3):
+        entry = StudyEntry(
+            user_id=seeded_user.id,
+            topic=f"T{i}",
+            summary="s",
+            raw_transcript="t",
+        )
+        session.add(entry)
+    session.commit()
+
+    assert repository.count_user_entries(seeded_user.id, session) == 3
+
+
+def test_count_user_entries_is_scoped_per_user(session, seeded_user, other_user):
+    session.add(StudyEntry(user_id=seeded_user.id, topic="mine", summary="s", raw_transcript="t"))
+    session.add(StudyEntry(user_id=other_user.id, topic="theirs", summary="s", raw_transcript="t"))
+    session.commit()
+
+    assert repository.count_user_entries(seeded_user.id, session) == 1
+    assert repository.count_user_entries(other_user.id, session) == 1

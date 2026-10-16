@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}Settings &middot; Spaced Repetition Agent{% endblock %}
+{% block content %}
+<section class="settings-card">
+  <h1>Settings</h1>
+  <p class="lede muted">
+    Configure when and how your daily quizzes are generated.
+  </p>
+  <form id="preferences-form" class="stacked-form" novalidate>
+    <div class="field">
+      <label for="preferred_review_time">Preferred review time</label>
+      <input
+        type="time"
+        id="preferred_review_time"
+        name="preferred_review_time"
+        value="{{ preferences.preferred_review_time }}"
+        required
+      >
+      <small class="hint">Local time in your selected timezone.</small>
+    </div>
+    <div class="field">
+      <label for="timezone">Timezone (IANA)</label>
+      <input
+        type="text"
+        id="timezone"
+        name="timezone"
+        value="{{ preferences.timezone }}"
+        pattern="^[A-Za-z][A-Za-z0-9_+\-/]*$"
+        required
+      >
+      <small class="hint">e.g. <code>UTC</code>, <code>America/New_York</code>, <code>Europe/London</code>.</small>
+    </div>
+    <div class="field">
+      <label for="quiz_question_count">Questions per quiz (1&ndash;{{ max_question_count }})</label>
+      <input
+        type="number"
+        id="quiz_question_count"
+        name="quiz_question_count"
+        min="1"
+        max="{{ max_question_count }}"
+        value="{{ preferences.quiz_question_count }}"
+        required
+      >
+    </div>
+    <div class="field">
+      <label for="quiz_option_count">Options per question (2&ndash;{{ max_option_count }})</label>
+      <input
+        type="number"
+        id="quiz_option_count"
+        name="quiz_option_count"
+        min="2"
+        max="{{ max_option_count }}"
+        value="{{ preferences.quiz_option_count }}"
+        required
+      >
+    </div>
+    <div class="field">
+      <label>Last wake-up notification</label>
+      <span class="readonly">
+        {% if preferences.wakeup_notification_sent_at %}
+          {{ preferences.wakeup_notification_sent_at }}
+        {% else %}
+          <span class="muted">Never sent.</span>
+        {% endif %}
+      </span>
+    </div>
+    <p class="form-actions">
+      <button type="submit" class="button primary">Save preferences</button>
+      <span id="preferences-status" class="status" role="status" aria-live="polite"></span>
+    </p>
+  </form>
+</section>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('web-static', path='/js/settings.js') }}"></script>
+{% endblock %}

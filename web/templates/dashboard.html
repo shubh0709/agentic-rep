@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}Dashboard &middot; Spaced Repetition Agent{% endblock %}
+{% block content %}
+<section class="dashboard-card">
+  <header class="dashboard-header">
+    <div>
+      <h1>Study dashboard</h1>
+      <p class="lede muted">
+        Browse every study entry you've captured, search by topic or tag, and see what's coming up for review.
+      </p>
+    </div>
+  </header>
+
+  <div class="stats-row" aria-label="At a glance">
+    <article class="stat-tile" data-stat="entries">
+      <span class="stat-label">Total entries</span>
+      <span class="stat-value" id="stat-total-entries">&mdash;</span>
+    </article>
+    <article class="stat-tile" data-stat="due">
+      <span class="stat-label">Due today</span>
+      <span class="stat-value" id="stat-due-today">&mdash;</span>
+    </article>
+    <article class="stat-tile" data-stat="upcoming">
+      <span class="stat-label">Upcoming (next 30 days)</span>
+      <span class="stat-value" id="stat-upcoming-total">&mdash;</span>
+    </article>
+  </div>
+
+  <section class="dashboard-section" aria-labelledby="entries-heading">
+    <header class="section-header">
+      <h2 id="entries-heading">Entries</h2>
+      <p class="muted">
+        <label class="search-field">
+          <span class="visually-hidden">Search entries</span>
+          <input
+            type="search"
+            id="entry-search"
+            placeholder="Search topic, subtopic, tag, or summary"
+            autocomplete="off"
+            spellcheck="false"
+          >
+        </label>
+      </p>
+    </header>
+    <p class="lede muted" id="entries-status" role="status" aria-live="polite">Loading entries&hellip;</p>
+    <div id="entries-root" data-state="loading"></div>
+  </section>
+
+  <section class="dashboard-section" aria-labelledby="upcoming-heading">
+    <header class="section-header">
+      <h2 id="upcoming-heading">Upcoming reviews</h2>
+      <p class="muted">
+        <label class="search-field">
+          <span class="visually-hidden">Days ahead</span>
+          <select id="upcoming-window" aria-label="Days ahead">
+            <option value="7">Next 7 days</option>
+            <option value="14">Next 14 days</option>
+            <option value="30" selected>Next 30 days</option>
+            <option value="90">Next 90 days</option>
+          </select>
+        </label>
+      </p>
+    </header>
+    <p class="lede muted" id="upcoming-status" role="status" aria-live="polite">Loading upcoming reviews&hellip;</p>
+    <div id="upcoming-root" data-state="loading"></div>
+  </section>
+</section>
+{% endblock %}
+{% block scripts %}
+<script type="module" src="{{ url_for('web-static', path='/js/dashboard.js') }}"></script>
+{% endblock %}

@@ -67,6 +67,7 @@ def _entry_to_entry_out(entry: StudyEntry) -> EntryOut:
         subtopic=entry.subtopic,
         tags=entry.tags,
         summary=entry.summary,
+        raw_transcript=entry.raw_transcript,
         created_at=entry.created_at,
     )
 

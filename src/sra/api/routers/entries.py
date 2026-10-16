@@ -52,6 +52,7 @@ def ingest_transcript(
                 subtopic=entry.subtopic,
                 tags=entry.tags,
                 summary=entry.summary,
+                raw_transcript=entry.raw_transcript,
                 created_at=entry.created_at,
             )
         )

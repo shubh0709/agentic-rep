@@ -7,7 +7,7 @@ new resource means adding it to this file, not to `app.py`.
 from fastapi import APIRouter, Depends
 
 from sra.api.rate_limit import limit_authenticated
-from sra.api.routers import admin, auth, chat, digest, entries, preferences, quiz, search
+from sra.api.routers import admin, auth, chat, dev, digest, entries, preferences, quiz, reviews, search
 
 api_router = APIRouter()
 api_router.include_router(auth.router)
@@ -19,5 +19,7 @@ for protected_router in (
     chat.router,
     quiz.router,
     preferences.router,
+    dev.router,
+    reviews.router,
 ):
     api_router.include_router(protected_router, dependencies=[Depends(limit_authenticated)])

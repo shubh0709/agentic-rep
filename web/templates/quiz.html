@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Today's quiz &middot; Spaced Repetition Agent{% endblock %}
+{% block content %}
+<section class="quiz-card">
+  <h1>Today's quiz</h1>
+  <p class="lede muted" id="quiz-status">Loading today's quizzes&hellip;</p>
+  <div id="quiz-root" data-state="loading"></div>
+</section>
+{% endblock %}
+{% block scripts %}
+<script type="module" src="{{ url_for('web-static', path='/js/quiz.js') }}"></script>
+{% endblock %}

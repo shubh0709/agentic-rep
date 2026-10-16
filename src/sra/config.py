@@ -52,6 +52,7 @@ class Settings(BaseSettings):
     demo_mode: bool = False
     demo_data_retention_days: int = Field(default=7, gt=0, le=365)
     demo_reset_interval_s: int = Field(default=3600, ge=60)
+    dev_mode: bool = False
 
     @model_validator(mode="after")
     def validate_rate_limit_ttl(self) -> Self:

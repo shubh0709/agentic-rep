@@ -209,6 +209,55 @@ def search_entries(
     return list(session.exec(statement).all())
 
 
+def list_upcoming_reviews(
+    user_id: int,
+    from_date: date,
+    to_date: date,
+    session: Session,
+) -> list[ReviewSchedule]:
+    """
+    Return this user's pending ``ReviewSchedule`` rows whose ``scheduled_date``
+    lies in the closed interval ``[from_date, to_date]`` and is strictly after
+    "due today" -- so the calendar view doesn't double-count rows the digest
+    endpoint already owns. Ordered by ``scheduled_date`` then ``id`` so identical
+    dates render in the same order they were scheduled.
+
+    Concept: a single SQL query for the entire window. The dashboard buckets
+    the result in JavaScript, keeping the response shape flat and avoiding a
+    custom JSON encoder for grouped data.
+    """
+
+    statement = (
+        select(ReviewSchedule)
+        .join(StudyEntry)
+        .where(
+            StudyEntry.user_id == user_id,  # pyright: ignore[reportArgumentType]
+            ReviewSchedule.status == "pending",
+            ReviewSchedule.scheduled_date >= from_date,  # pyright: ignore[reportArgumentType]
+            ReviewSchedule.scheduled_date <= to_date,  # pyright: ignore[reportArgumentType]
+        )
+        .order_by(
+            ReviewSchedule.scheduled_date,  # pyright: ignore[reportArgumentType]
+            ReviewSchedule.id,  # pyright: ignore[reportArgumentType]
+        )
+    )
+    return list(session.exec(statement).all())
+
+
+def count_user_entries(user_id: int, session: Session) -> int:
+    """Return the count of ``StudyEntry`` rows owned by ``user_id``.
+
+    The dashboard header renders this as the "Total entries" tile. Implemented
+    as a single ``SELECT count(*)`` against the indexed ``user_id`` column so
+    it stays cheap even for users with thousands of captures.
+    """
+
+    statement = select(func.count(StudyEntry.id)).where(  # pyright: ignore[reportArgumentType]
+        StudyEntry.user_id == user_id,
+    )
+    return int(session.exec(statement).one())
+
+
 def mark_review_done(user_id: int, review_id: int, status: str, session: Session) -> ReviewSchedule:
     """
     Flip a review's status ("done" or "skipped") and stamp

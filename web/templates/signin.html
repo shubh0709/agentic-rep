@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Sign in &middot; Spaced Repetition Agent{% endblock %}
+{% block content %}
+<section class="signin-card">
+  <h1>Sign in</h1>
+  <p class="lede">
+    Sign in to load your quizzes, preferences, and review history. We use
+    Google to verify your identity &mdash; no password is stored on this
+    server.
+  </p>
+  {% if auth_configured %}
+    <p class="cta-row">
+      <a class="button primary google" href="{{ google_login_url }}">
+        Continue with Google
+      </a>
+    </p>
+  {% else %}
+    <p class="error">
+      Google OAuth is not configured. The server administrator needs to
+      set <code>GOOGLE_CLIENT_ID</code>, <code>GOOGLE_CLIENT_SECRET</code>,
+      and <code>AUTH_SIGNING_SECRET</code> in <code>.env</code> before
+      sign-in is available.
+    </p>
+  {% endif %}
+  <p class="hint">
+    After sign-in you'll be redirected to
+    {% if next %}<code>{{ next }}</code>{% else %}your daily quiz{% endif %}.
+  </p>
+</section>
+{% endblock %}
