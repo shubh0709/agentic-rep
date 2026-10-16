@@ -51,6 +51,8 @@ def test_get_preferences_returns_defaults_for_a_fresh_user(client, seeded_user):
         "timezone": "UTC",
         "quiz_question_count": 10,
         "quiz_option_count": 4,
+        "interview_question_count": 6,
+        "interview_target_minutes": 5,
         "wakeup_notification_sent_at": None,
     }
 
@@ -63,6 +65,8 @@ def test_put_preferences_round_trips_valid_body(client, session, seeded_user):
             "timezone": "America/Los_Angeles",
             "quiz_question_count": 12,
             "quiz_option_count": 5,
+            "interview_question_count": 6,
+            "interview_target_minutes": 5,
         },
     )
 
@@ -72,12 +76,102 @@ def test_put_preferences_round_trips_valid_body(client, session, seeded_user):
     assert body["timezone"] == "America/Los_Angeles"
     assert body["quiz_question_count"] == 12
     assert body["quiz_option_count"] == 5
+    assert body["interview_question_count"] == 6
+    assert body["interview_target_minutes"] == 5
 
     stored = session.exec(select(User).where(User.id == seeded_user.id)).one()
     assert stored.preferred_review_time == "07:30"
     assert stored.timezone == "America/Los_Angeles"
     assert stored.quiz_question_count == 12
     assert stored.quiz_option_count == 5
+    assert stored.interview_question_count == 6
+    assert stored.interview_target_minutes == 5
+
+
+def test_put_preferences_accepts_legacy_4_field_body_and_keeps_interview_defaults(client, session, seeded_user):
+    """Regression guard for SRA-801→SRA-809 customer escape valve.
+
+    The web ``PUT /api/v1/me/preferences`` form originally sent only the four
+    legacy quiz fields. Phase 8 promoted two extra ``interview_*`` columns to
+    the API surface. The router and schema must keep backward compatibility
+    so an existing form continues to round-trip successfully without forcing
+    every caller to learn about interview fields.
+
+    Sent fields update; omitted fields keep their persisted DB value
+    (defaults for a fresh user).
+    """
+    response = client.put(
+        "/api/v1/me/preferences",
+        json={
+            "preferred_review_time": "08:15",
+            "timezone": "America/New_York",
+            "quiz_question_count": 15,
+            "quiz_option_count": 5,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["preferred_review_time"] == "08:15"
+    assert body["timezone"] == "America/New_York"
+    assert body["quiz_question_count"] == 15
+    assert body["quiz_option_count"] == 5
+    # Interview fields omitted → defaults preserved on the row.
+    assert body["interview_question_count"] == 6
+    assert body["interview_target_minutes"] == 5
+
+
+def test_put_preferences_partial_update_preserves_other_interview_field(client, session, seeded_user):
+    """When exactly one interview field is supplied, the other stays put."""
+    seeded_user.interview_question_count = 9
+    seeded_user.interview_target_minutes = 7
+    session.add(seeded_user)
+    session.commit()
+    session.refresh(seeded_user)
+
+    response = client.put(
+        "/api/v1/me/preferences",
+        json={
+            "preferred_review_time": "07:00",
+            "timezone": "UTC",
+            "quiz_question_count": 10,
+            "quiz_option_count": 4,
+            "interview_question_count": 12,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["interview_question_count"] == 12
+    assert body["interview_target_minutes"] == 7
+
+
+def test_put_preferences_rejects_invalid_legacy_4_field_inputs(client):
+    """The 4-field form must still validate the legacy fields it sends."""
+    response = client.put(
+        "/api/v1/me/preferences",
+        json={
+            "preferred_review_time": "9am",
+            "timezone": "UTC",
+            "quiz_question_count": 10,
+            "quiz_option_count": 4,
+        },
+    )
+    assert response.status_code == 400
+
+    response = client.put(
+        "/api/v1/me/preferences",
+        json={
+            "preferred_review_time": "09:00",
+            "timezone": "IST",
+            "quiz_question_count": 10,
+            "quiz_option_count": 4,
+        },
+    )
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    fields = {err["field"] for err in detail}
+    assert "timezone" in fields
 
 
 def test_put_preferences_preserves_wakeup_sent_at(client, session, seeded_user):
@@ -93,6 +187,8 @@ def test_put_preferences_preserves_wakeup_sent_at(client, session, seeded_user):
             "timezone": "UTC",
             "quiz_question_count": 10,
             "quiz_option_count": 4,
+            "interview_question_count": 6,
+            "interview_target_minutes": 5,
         },
     )
 
@@ -199,6 +295,8 @@ def test_put_preferences_is_scoped_to_the_calling_user(monkeypatch, session, see
             "timezone": "Europe/Berlin",
             "quiz_question_count": 10,
             "quiz_option_count": 4,
+            "interview_question_count": 6,
+            "interview_target_minutes": 5,
         },
     )
     assert response.status_code == 200
