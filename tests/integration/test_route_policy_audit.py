@@ -16,6 +16,7 @@ def test_every_mounted_route_has_an_explicit_authentication_and_limit_policy(cli
         ("GET", "/api/v1/auth/google/callback"): "anonymous",
         ("POST", "/api/v1/auth/desktop/exchange"): "anonymous",
         ("POST", "/api/v1/auth/logout"): "anonymous",
+        ("POST", "/api/v1/auth/refresh"): "anonymous",
         ("GET", "/api/v1/auth/me"): "user",
         ("POST", "/api/v1/entries/ingest"): "user",
         ("GET", "/api/v1/search"): "user",
@@ -29,13 +30,27 @@ def test_every_mounted_route_has_an_explicit_authentication_and_limit_policy(cli
         ("POST", "/api/v1/quiz/attempts/{attempt_id}/voice-turn"): "user",
         ("POST", "/api/v1/quiz/attempts/{attempt_id}/complete"): "user",
         ("GET", "/api/v1/quiz/attempts/{attempt_id}"): "user",
+        ("POST", "/api/v1/quiz/attempts/{attempt_id}/interview-turn"): "user",
+        ("GET", "/api/v1/quiz/attempts/{attempt_id}/interview"): "user",
         ("GET", "/api/v1/me/preferences"): "user",
         ("PUT", "/api/v1/me/preferences"): "user",
+        ("GET", "/api/v1/reviews/upcoming"): "user",
+        ("POST", "/api/v1/me/dev/pregenerate-now"): "user",
         ("GET", "/api/v1/admin/usage"): "admin",
         ("GET", "/api/v1/admin/rate-limits"): "admin",
         ("POST", "/api/v1/admin/demo/reset"): "admin",
+        # SRA-701 dashboard SSR pages -- unauthenticated browser shell that
+        # redirects to /api/v1/auth/google/login when the SPA needs a session.
+        ("GET", "/"): "public",
+        ("GET", "/signin"): "public",
+        ("POST", "/signout"): "public",
+        ("GET", "/quiz"): "user",
+        ("GET", "/dashboard"): "user",
+        ("GET", "/dashboard/interview"): "user",
+        ("GET", "/settings"): "user",
+        ("GET", "/healthz"): "public",
     }
-    framework_public = {"/openapi.json", "/docs", "/docs/oauth2-redirect", "/redoc"}
+    framework_public = {"/openapi.json", "/docs", "/docs/oauth2-redirect", "/redoc", "/static", "/dashboard-static"}
     seen = set()
 
     def dependencies(dependant):

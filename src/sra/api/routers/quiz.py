@@ -1,8 +1,14 @@
 from datetime import date
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlmodel import Session, select
 
+from sra.agents.interview_conversation_graph import (
+    InterviewAttemptAlreadyCompletedError,
+    InterviewAttemptFullError,
+    InterviewLLMError,
+    process_interview_turn,
+)
 from sra.agents.quiz_conversation_graph import (
     QuizAttemptAlreadyCompletedError,
     QuizVoiceInterpretationError,
@@ -12,6 +18,13 @@ from sra.api.deps import get_session, require_user
 from sra.api.schemas import (
     AnswerResult,
     EntryOut,
+    InterviewDetailOut,
+    InterviewOutlineItemOut,
+    InterviewPlanOut,
+    InterviewSummaryOut,
+    InterviewTurnOut,
+    InterviewTurnRequest,
+    InterviewTurnResponse,
     QuizAttemptOut,
     QuizQuestionOut,
     QuizSetOut,
@@ -21,6 +34,9 @@ from sra.api.schemas import (
     VoiceTurnResponse,
 )
 from sra.db.models import (
+    InterviewPlan,
+    InterviewTurn,
+    InterviewTurnRole,
     QuizAnswer,
     QuizAttempt,
     QuizAttemptCreate,
@@ -31,6 +47,8 @@ from sra.db.models import (
 )
 from sra.db.repository import (
     complete_quiz_attempt,
+    get_interview_turns,
+    get_or_create_interview_plan,
     get_quiz_questions,
     list_today_quiz_sets,
     save_quiz_answer,
@@ -82,6 +100,57 @@ def _question_to_out(question: QuizQuestion) -> QuizQuestionOut:
     )
 
 
+def _interview_turn_to_out(turn: InterviewTurn) -> InterviewTurnOut:
+    assert turn.id is not None
+    return InterviewTurnOut(
+        id=turn.id,
+        role=turn.role,  # type: ignore[arg-type]
+        content=turn.content,
+        score=turn.score,
+        outline_index=turn.outline_index,
+        created_at=turn.created_at,
+    )
+
+
+def _attempt_to_out(attempt: QuizAttempt) -> QuizAttemptOut:
+    assert attempt.id is not None
+    return QuizAttemptOut(
+        id=attempt.id,
+        quiz_set_id=attempt.quiz_set_id,
+        mode=attempt.mode,
+        started_at=attempt.started_at,
+        completed_at=attempt.completed_at,
+        score=attempt.score,
+        total_questions=attempt.total_questions,
+        cursor_on_plan=attempt.cursor_on_plan,
+    )
+
+
+def _interview_plan_to_out(plan: InterviewPlan) -> InterviewPlanOut:
+    assert plan.id is not None
+    outline: list[InterviewOutlineItemOut] = []
+    for item in (plan.outline or []):
+        subtopic = (item.get("subtopic") or "").strip() or "general"
+        focus_prompt = (item.get("focus_prompt") or "").strip() or "general recap"
+        difficulty = item.get("difficulty", "medium")
+        if difficulty not in ("easy", "medium", "hard"):
+            difficulty = "medium"
+        outline.append(
+            InterviewOutlineItemOut(
+                subtopic=subtopic,
+                difficulty=difficulty,  # type: ignore[arg-type]
+                focus_prompt=focus_prompt,
+            )
+        )
+    return InterviewPlanOut(
+        id=plan.id,
+        quiz_set_id=plan.quiz_set_id,
+        outline=outline,
+        target_questions=plan.target_questions,
+        created_at=plan.created_at,
+    )
+
+
 def _build_quiz_set_out(session: Session, quiz_set: QuizSet) -> QuizSetOut:
     assert quiz_set.id is not None
     questions = list(
@@ -129,6 +198,7 @@ def get_quiz_set(
 def start_quiz_attempt(
     quiz_set_id: int,
     body: StartAttemptRequest,
+    request: Request,
     user: User = Depends(require_user),
     session: Session = Depends(get_session),
 ) -> dict[str, object]:
@@ -154,6 +224,17 @@ def start_quiz_attempt(
             "attempt_id": attempt.id,
             "question_text": first_question.question_text,
             "options": list(first_question.options),
+        }
+    if body.mode == "interview":
+        get_or_create_interview_plan(quiz_set.id, session)
+        result = process_interview_turn(
+            session=session, attempt=attempt, action="start"
+        )
+        request.app.state.last_attempt_id_for_test = attempt.id
+        return {
+            "attempt_id": attempt.id,
+            "question_text": result.question_text,
+            "transcript_so_far": result.transcript_so_far,
         }
     return {"attempt_id": attempt.id, "question_text": None}
 
@@ -262,4 +343,110 @@ def get_quiz_attempt(
         completed_at=attempt.completed_at,
         score=attempt.score,
         total_questions=attempt.total_questions,
+    )
+
+
+# ---------------------------------------------------------------------------
+# SRA-805 — Interactive interview mode routes.
+# Added at the end of the file so the existing 404 tests for the older
+# ``POST /quiz/{id}/attempts`` / ``POST /quiz/attempts/{id}/answers`` paths
+# keep matching first. The new routes inherit the per-user rate-limit bucket
+# via the router-level ``limit_authenticated`` dependency registered in
+# ``sra.api.routers.__init__``.
+# ---------------------------------------------------------------------------
+
+INTERVIEW_MODE_REQUIRED = "This endpoint requires an interview mode attempt"
+
+
+@router.post(
+    "/attempts/{attempt_id}/interview-turn",
+    response_model=InterviewTurnResponse,
+)
+def interview_turn(
+    attempt_id: int,
+    body: InterviewTurnRequest,
+    user: User = Depends(require_user),
+    session: Session = Depends(get_session),
+) -> InterviewTurnResponse:
+    assert user.id is not None
+    attempt = _get_owned_attempt(session, user.id, attempt_id)
+    if attempt.mode != "interview":
+        raise HTTPException(status_code=400, detail=INTERVIEW_MODE_REQUIRED)
+    if attempt.completed_at is not None:
+        raise HTTPException(status_code=409, detail="Attempt already completed")
+    try:
+        result = process_interview_turn(
+            session=session,
+            attempt=attempt,
+            action=body.action,
+            answer_text=body.answer_text,
+        )
+    except InterviewAttemptAlreadyCompletedError as exc:
+        raise HTTPException(
+            status_code=409, detail="Attempt already completed"
+        ) from exc
+    except InterviewAttemptFullError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except InterviewLLMError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    session.refresh(attempt)
+    assert attempt.id is not None
+    turns = get_interview_turns(attempt.id, session)
+    transcript = [_interview_turn_to_out(t) for t in turns]
+    return InterviewTurnResponse(
+        question_text=result.question_text,
+        score=result.score,
+        rationale=result.rationale,
+        feedback=result.feedback,
+        finished=result.finished,
+        summary=result.summary,
+        transcript_so_far=transcript,
+        attempt=_attempt_to_out(attempt),
+    )
+
+
+@router.get(
+    "/attempts/{attempt_id}/interview",
+    response_model=InterviewDetailOut,
+)
+def get_interview(
+    attempt_id: int,
+    user: User = Depends(require_user),
+    session: Session = Depends(get_session),
+) -> InterviewDetailOut:
+    assert user.id is not None
+    attempt = _get_owned_attempt(session, user.id, attempt_id)
+    quiz_set = session.get(QuizSet, attempt.quiz_set_id)
+    if quiz_set is None:
+        raise HTTPException(status_code=404, detail="Quiz not found")
+    assert quiz_set.id is not None
+    _, plan = get_or_create_interview_plan(quiz_set.id, session)
+    assert attempt.id is not None
+    turns = get_interview_turns(attempt.id, session)
+    turn_outs = [_interview_turn_to_out(t) for t in turns]
+    summary_out: InterviewSummaryOut | None = None
+    if attempt.completed_at is not None:
+        summary_turns = [
+            t for t in turns if t.role == InterviewTurnRole.SYSTEM_SUMMARY.value
+        ]
+        summary_text = summary_turns[0].content if summary_turns else ""
+        user_turns = [
+            t for t in turns if t.role == InterviewTurnRole.USER.value
+        ]
+        user_scores = [t.score for t in user_turns if isinstance(t.score, int)]
+        mean_score = sum(user_scores) // len(user_scores) if user_scores else 0
+        total = len(plan.outline or [])
+        answered = len(user_turns)
+        remaining = max(total - answered, 0)
+        summary_out = InterviewSummaryOut(
+            score=mean_score,
+            answered_count=answered,
+            remaining_count=remaining,
+            summary_text=summary_text,
+        )
+    return InterviewDetailOut(
+        plan=_interview_plan_to_out(plan),
+        turns=turn_outs,
+        summary=summary_out,
+        attempt=_attempt_to_out(attempt),
     )
