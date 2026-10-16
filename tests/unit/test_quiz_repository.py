@@ -1,3 +1,5 @@
+
+# pyright: reportAttributeAccessIssue=false, reportArgumentType=false, reportOptionalMemberAccess=false, reportCallIssue=false, reportGeneralTypeIssues=false
 """SRA-402 quiz repository helper contracts."""
 
 from datetime import date
@@ -299,3 +301,299 @@ def test_get_quiz_attempt_enforces_ownership(session, seeded_user, other_user):
     assert own is not None
     assert own.id == attempt.id
     assert other_result is None
+
+
+# ---------------------------------------------------------------------------
+# SRA-804 — Interview repository helpers
+# ---------------------------------------------------------------------------
+
+
+phase8 = pytest.mark.phase8  # noqa: E402  -- marker alias below the Phase 4 marker
+
+
+@phase8
+def test_create_interview_plan_is_idempotent_on_same_quiz_set_id(session, seeded_user):
+    from sra.db.models import InterviewPlan
+    from sra.db.repository import create_interview_plan
+
+    entry = _make_entry(session, seeded_user)
+    quiz_set = repository.create_quiz_set(
+        entry=entry,
+        user_id=seeded_user.id,
+        session=session,
+        generated_on=date.today(),
+        question_count=1,
+        option_count=4,
+        drafts=_drafts(1, option_count=4),
+    )
+    assert quiz_set.id is not None
+    outline = [
+        {"subtopic": "a", "difficulty": "easy", "focus_prompt": "x"},
+        {"subtopic": "b", "difficulty": "medium", "focus_prompt": "y"},
+    ]
+    first = create_interview_plan(
+        quiz_set=quiz_set,
+        outline=outline,
+        target_questions=2,
+        session=session,
+    )
+    second = create_interview_plan(
+        quiz_set=quiz_set,
+        outline=outline,
+        target_questions=2,
+        session=session,
+    )
+    assert first.id == second.id
+    assert session.exec(select(InterviewPlan)).one().id == first.id
+
+
+@phase8
+def test_create_interview_plan_returns_none_when_outline_is_empty(session, seeded_user):
+    from sra.db.repository import create_interview_plan
+
+    entry = _make_entry(session, seeded_user)
+    quiz_set = repository.create_quiz_set(
+        entry=entry,
+        user_id=seeded_user.id,
+        session=session,
+        generated_on=date.today(),
+        question_count=1,
+        option_count=4,
+        drafts=_drafts(1, option_count=4),
+    )
+    result = create_interview_plan(
+        quiz_set=quiz_set,
+        outline=[],
+        target_questions=0,
+        session=session,
+    )
+    assert result is None
+
+
+@phase8
+def test_get_or_create_interview_plan_raises_value_error_when_quiz_set_missing(session):
+    from sra.db.repository import get_or_create_interview_plan
+
+    with pytest.raises(ValueError):
+        get_or_create_interview_plan(999_999, session)
+
+
+@phase8
+def test_get_or_create_interview_plan_returns_existing_plan(session, seeded_user):
+    from sra.db.repository import create_interview_plan, get_or_create_interview_plan
+
+    entry = _make_entry(session, seeded_user)
+    quiz_set = repository.create_quiz_set(
+        entry=entry,
+        user_id=seeded_user.id,
+        session=session,
+        generated_on=date.today(),
+        question_count=1,
+        option_count=4,
+        drafts=_drafts(1, option_count=4),
+    )
+    outline = [{"subtopic": "a", "difficulty": "easy", "focus_prompt": "x"}]
+    plan = create_interview_plan(
+        quiz_set=quiz_set, outline=outline, target_questions=1, session=session
+    )
+    assert plan.id is not None
+
+    _quiz_set, returned = get_or_create_interview_plan(quiz_set.id, session)
+    assert returned.id == plan.id
+
+
+@phase8
+def test_get_or_create_interview_plan_creates_placeholder_when_missing(session, seeded_user):
+    from sra.db.repository import get_or_create_interview_plan
+
+    entry = _make_entry(session, seeded_user)
+    quiz_set = repository.create_quiz_set(
+        entry=entry,
+        user_id=seeded_user.id,
+        session=session,
+        generated_on=date.today(),
+        question_count=1,
+        option_count=4,
+        drafts=_drafts(1, option_count=4),
+    )
+    assert quiz_set.id is not None
+    _quiz_set, plan = get_or_create_interview_plan(quiz_set.id, session)
+    assert plan.id is not None
+    assert plan.quiz_set_id == quiz_set.id
+    assert plan.outline  # placeholder outline is non-empty
+
+
+@phase8
+def test_append_interview_turn_rejects_unknown_role(session, seeded_user):
+    from sra.db.repository import append_interview_turn
+
+    entry = _make_entry(session, seeded_user)
+    quiz_set = repository.create_quiz_set(
+        entry=entry,
+        user_id=seeded_user.id,
+        session=session,
+        generated_on=date.today(),
+        question_count=1,
+        option_count=4,
+        drafts=_drafts(1, option_count=4),
+    )
+    attempt = QuizAttempt(
+        quiz_set_id=quiz_set.id, user_id=seeded_user.id, total_questions=1
+    )
+    session.add(attempt)
+    session.commit()
+    session.refresh(attempt)
+    with pytest.raises(ValueError):
+        append_interview_turn(
+            attempt=attempt,
+            role="bogus",
+            content="x",
+            session=session,
+        )
+
+
+@phase8
+def test_append_interview_turn_rejects_empty_content(session, seeded_user):
+    from sra.db.repository import append_interview_turn
+
+    entry = _make_entry(session, seeded_user)
+    quiz_set = repository.create_quiz_set(
+        entry=entry,
+        user_id=seeded_user.id,
+        session=session,
+        generated_on=date.today(),
+        question_count=1,
+        option_count=4,
+        drafts=_drafts(1, option_count=4),
+    )
+    attempt = QuizAttempt(
+        quiz_set_id=quiz_set.id, user_id=seeded_user.id, total_questions=1
+    )
+    session.add(attempt)
+    session.commit()
+    session.refresh(attempt)
+    with pytest.raises(ValueError):
+        append_interview_turn(
+            attempt=attempt,
+            role="ai",
+            content="   ",
+            session=session,
+        )
+
+
+@phase8
+def test_get_interview_turns_returns_rows_in_id_asc(session, seeded_user):
+    from sra.db.repository import (
+        append_interview_turn,
+        create_interview_plan,
+        get_interview_turns,
+    )
+
+    entry = _make_entry(session, seeded_user)
+    quiz_set = repository.create_quiz_set(
+        entry=entry,
+        user_id=seeded_user.id,
+        session=session,
+        generated_on=date.today(),
+        question_count=1,
+        option_count=4,
+        drafts=_drafts(1, option_count=4),
+    )
+    attempt = QuizAttempt(
+        quiz_set_id=quiz_set.id, user_id=seeded_user.id, total_questions=1
+    )
+    session.add(attempt)
+    session.commit()
+    session.refresh(attempt)
+    assert quiz_set.id is not None
+    outline = [{"subtopic": "a", "difficulty": "easy", "focus_prompt": "x"}]
+    create_interview_plan(quiz_set=quiz_set, outline=outline, target_questions=1, session=session)
+
+    append_interview_turn(attempt=attempt, role="ai", content="q1", session=session)
+    append_interview_turn(attempt=attempt, role="user", content="answer1", score=70, session=session)
+    append_interview_turn(attempt=attempt, role="ai", content="q2", session=session)
+
+    turns = get_interview_turns(attempt.id, session)
+    assert [t.content for t in turns] == ["q1", "answer1", "q2"]
+    assert [t.role for t in turns] == ["ai", "user", "ai"]
+
+
+@phase8
+def test_get_interview_turns_returns_empty_when_no_rows(session, seeded_user):
+    from sra.db.repository import get_interview_turns
+
+    assert get_interview_turns(999_999, session) == []
+
+
+@phase8
+def test_complete_interview_attempt_sets_rounded_mean_and_completed_at(session, seeded_user):
+    from sra.db.repository import (
+        append_interview_turn,
+        complete_interview_attempt,
+        create_interview_plan,
+    )
+
+    entry = _make_entry(session, seeded_user)
+    quiz_set = repository.create_quiz_set(
+        entry=entry,
+        user_id=seeded_user.id,
+        session=session,
+        generated_on=date.today(),
+        question_count=1,
+        option_count=4,
+        drafts=_drafts(1, option_count=4),
+    )
+    attempt = QuizAttempt(
+        quiz_set_id=quiz_set.id, user_id=seeded_user.id, total_questions=1
+    )
+    session.add(attempt)
+    session.commit()
+    session.refresh(attempt)
+    outline = [{"subtopic": "a", "difficulty": "easy", "focus_prompt": "x"}]
+    create_interview_plan(
+        quiz_set=quiz_set, outline=outline, target_questions=1, session=session
+    )
+    append_interview_turn(attempt=attempt, role="user", content="a", score=70, session=session)
+    append_interview_turn(attempt=attempt, role="user", content="b", score=80, session=session)
+
+    mean = (70 + 80) / 2
+    completed = complete_interview_attempt(attempt=attempt, mean_score=mean, session=session)
+
+    assert completed.score == 75
+    assert completed.completed_at is not None
+    assert completed.completed_at.tzinfo is not None
+
+
+@phase8
+def test_complete_interview_attempt_called_twice_raises(session, seeded_user):
+    from sra.db.repository import (
+        append_interview_turn,
+        complete_interview_attempt,
+        create_interview_plan,
+    )
+
+    entry = _make_entry(session, seeded_user)
+    quiz_set = repository.create_quiz_set(
+        entry=entry,
+        user_id=seeded_user.id,
+        session=session,
+        generated_on=date.today(),
+        question_count=1,
+        option_count=4,
+        drafts=_drafts(1, option_count=4),
+    )
+    attempt = QuizAttempt(
+        quiz_set_id=quiz_set.id, user_id=seeded_user.id, total_questions=1
+    )
+    session.add(attempt)
+    session.commit()
+    session.refresh(attempt)
+    outline = [{"subtopic": "a", "difficulty": "easy", "focus_prompt": "x"}]
+    create_interview_plan(
+        quiz_set=quiz_set, outline=outline, target_questions=1, session=session
+    )
+    append_interview_turn(attempt=attempt, role="user", content="a", score=50, session=session)
+    complete_interview_attempt(attempt=attempt, mean_score=50, session=session)
+
+    with pytest.raises(ValueError):
+        complete_interview_attempt(attempt=attempt, mean_score=50, session=session)
