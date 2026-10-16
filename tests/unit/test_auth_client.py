@@ -30,6 +30,7 @@ pytestmark = pytest.mark.phase3
 class MemoryCredentialStore:
     values: dict[tuple[str, str], str] = field(default_factory=dict)
     saves: list[tuple[str, str, str]] = field(default_factory=list)
+    pair_saves: list[tuple[str, str, str, str]] = field(default_factory=list)
     deletes: list[tuple[str, str]] = field(default_factory=list)
 
     def load(self, *, server_origin, account):
@@ -38,6 +39,18 @@ class MemoryCredentialStore:
     def save(self, *, server_origin, account, credential):
         self.values[(server_origin, account)] = credential
         self.saves.append((server_origin, account, credential))
+
+    def save_pair(self, *, server_origin, account, credential, refresh_credential):
+        """Persist a refresh-capable pair (SRA-306).
+
+        Mirrors :meth:`save` for the active credential and records the
+        refresh credential so tests can assert the post-refresh rotation
+        path called this entry-point. The Phase-3 tests in this file only
+        use ``save`` / ``load``; the method is required so the fake matches
+        the ``CredentialStore`` protocol pyright checks.
+        """
+        self.values[(server_origin, account)] = credential
+        self.pair_saves.append((server_origin, account, credential, refresh_credential))
 
     def delete(self, *, server_origin, account):
         self.values.pop((server_origin, account), None)
