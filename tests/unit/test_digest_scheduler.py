@@ -3,7 +3,7 @@
 # pyright: reportAttributeAccessIssue=false, reportArgumentType=false, reportOptionalMemberAccess=false, reportCallIssue=false
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 import pytest
 from sqlmodel import select
@@ -46,9 +46,27 @@ def _make_entry(session, user_id: int) -> StudyEntry:
     return entry
 
 
-def _add_pending_review(session, entry_id: int) -> ReviewSchedule:
+def _add_pending_review(
+    session,
+    entry_id: int,
+    *,
+    scheduled_date: date | None = None,
+) -> ReviewSchedule:
+    """Persist a pending ``ReviewSchedule`` whose ``scheduled_date`` is explicitly pinned.
+
+    Tests freeze ``as_of_utc`` to a historical value (e.g. ``datetime(2026, 10, 14,
+    9, 30, tzinfo=UTC)``). The production scheduler only treats a review as
+    "due" when ``scheduled_date <= local_today`` for that ``as_of_utc``. Earlier
+    revisions of this helper used ``datetime.now(UTC).date()`` so the test passed
+    on the day the fixture landed and silently broke every day after; pass
+    ``scheduled_date`` here so every test controls its own clock.
+    """
+    effective = scheduled_date if scheduled_date is not None else datetime.now(UTC).date()
     review = ReviewSchedule(
-        entry_id=entry_id, interval_label="1d", scheduled_date=datetime.now(UTC).date(), status="pending"
+        entry_id=entry_id,
+        interval_label="1d",
+        scheduled_date=effective,
+        status="pending",
     )
     session.add(review)
     session.commit()
@@ -56,9 +74,12 @@ def _add_pending_review(session, entry_id: int) -> ReviewSchedule:
     return review
 
 
+_FIXED_AS_OF_DATE = date(2026, 10, 14)
+
+
 def test_users_due_for_wakeup_returns_user_just_after_their_local_review_time(session, digest_scheduler):
     user = _make_user(session, email="a@example.com", google_sub="a-sub", review_time="09:00", tz="UTC")
-    _add_pending_review(session, _make_entry(session, user.id).id)
+    _add_pending_review(session, _make_entry(session, user.id).id, scheduled_date=_FIXED_AS_OF_DATE)
 
     as_of = datetime(2026, 10, 14, 9, 30, tzinfo=UTC)
     due = digest_scheduler.users_due_for_wakeup(as_of_utc=as_of, session=session)
@@ -68,7 +89,7 @@ def test_users_due_for_wakeup_returns_user_just_after_their_local_review_time(se
 
 def test_users_due_for_wakeup_excludes_user_already_notified_today(session, digest_scheduler):
     user = _make_user(session, email="a@example.com", google_sub="a-sub", review_time="09:00", tz="UTC")
-    _add_pending_review(session, _make_entry(session, user.id).id)
+    _add_pending_review(session, _make_entry(session, user.id).id, scheduled_date=_FIXED_AS_OF_DATE)
     user.wakeup_notification_sent_at = datetime(2026, 10, 14, 9, 5, tzinfo=UTC)
     session.add(user)
     session.commit()
@@ -82,7 +103,7 @@ def test_users_due_for_wakeup_excludes_user_already_notified_today(session, dige
 
 def test_users_due_for_wakeup_includes_user_again_next_local_day(session, digest_scheduler):
     user = _make_user(session, email="a@example.com", google_sub="a-sub", review_time="09:00", tz="UTC")
-    _add_pending_review(session, _make_entry(session, user.id).id)
+    _add_pending_review(session, _make_entry(session, user.id).id, scheduled_date=_FIXED_AS_OF_DATE)
     user.wakeup_notification_sent_at = datetime(2026, 10, 13, 9, 5, tzinfo=UTC)
     session.add(user)
     session.commit()
@@ -104,7 +125,7 @@ def test_users_due_for_wakeup_converts_to_local_timezone_before_comparing(sessio
         review_time="07:30",
         tz="America/Los_Angeles",
     )
-    _add_pending_review(session, _make_entry(session, user.id).id)
+    _add_pending_review(session, _make_entry(session, user.id).id, scheduled_date=_FIXED_AS_OF_DATE)
 
     as_of_just_before = datetime(2026, 10, 14, 14, 29, tzinfo=UTC)
     assert digest_scheduler.users_due_for_wakeup(as_of_utc=as_of_just_before, session=session) == []
@@ -116,9 +137,9 @@ def test_users_due_for_wakeup_converts_to_local_timezone_before_comparing(sessio
 
 def test_users_due_for_wakeup_skips_and_logs_bad_timezone_user(session, caplog, digest_scheduler):
     good = _make_user(session, email="good@example.com", google_sub="good-sub")
-    _add_pending_review(session, _make_entry(session, good.id).id)
+    _add_pending_review(session, _make_entry(session, good.id).id, scheduled_date=_FIXED_AS_OF_DATE)
     bad = _make_user(session, email="bad@example.com", google_sub="bad-sub")
-    _add_pending_review(session, _make_entry(session, bad.id).id)
+    _add_pending_review(session, _make_entry(session, bad.id).id, scheduled_date=_FIXED_AS_OF_DATE)
     bad.timezone = "Mars/Olympus"
     session.add(bad)
     session.commit()
@@ -153,7 +174,7 @@ def test_users_due_for_wakeup_excludes_users_without_pending_reviews_today(sessi
 
 def test_run_wakeup_tick_sets_wakeup_notification_sent_at_for_due_users(session, digest_scheduler):
     user = _make_user(session, email="a@example.com", google_sub="a-sub", review_time="09:00", tz="UTC")
-    _add_pending_review(session, _make_entry(session, user.id).id)
+    _add_pending_review(session, _make_entry(session, user.id).id, scheduled_date=_FIXED_AS_OF_DATE)
     as_of = datetime(2026, 10, 14, 9, 30, tzinfo=UTC)
 
     count = digest_scheduler.run_wakeup_tick(session=session, as_of_utc=as_of)
@@ -165,7 +186,7 @@ def test_run_wakeup_tick_sets_wakeup_notification_sent_at_for_due_users(session,
 
 def test_run_wakeup_tick_is_idempotent_within_a_local_day(session, digest_scheduler):
     user = _make_user(session, email="a@example.com", google_sub="a-sub", review_time="09:00", tz="UTC")
-    _add_pending_review(session, _make_entry(session, user.id).id)
+    _add_pending_review(session, _make_entry(session, user.id).id, scheduled_date=_FIXED_AS_OF_DATE)
     as_of = datetime(2026, 10, 14, 9, 30, tzinfo=UTC)
 
     first = digest_scheduler.run_wakeup_tick(session=session, as_of_utc=as_of)
@@ -177,9 +198,9 @@ def test_run_wakeup_tick_is_idempotent_within_a_local_day(session, digest_schedu
 
 def test_run_wakeup_tick_continues_past_a_per_user_exception(session, monkeypatch, caplog, digest_scheduler):
     good = _make_user(session, email="good@example.com", google_sub="good-sub")
-    _add_pending_review(session, _make_entry(session, good.id).id)
+    _add_pending_review(session, _make_entry(session, good.id).id, scheduled_date=_FIXED_AS_OF_DATE)
     bad = _make_user(session, email="bad@example.com", google_sub="bad-sub", tz="Mars/Olympus")
-    _add_pending_review(session, _make_entry(session, bad.id).id)
+    _add_pending_review(session, _make_entry(session, bad.id).id, scheduled_date=_FIXED_AS_OF_DATE)
 
     as_of = datetime(2026, 10, 14, 9, 30, tzinfo=UTC)
     with caplog.at_level(logging.WARNING):
@@ -192,7 +213,7 @@ def test_run_wakeup_tick_continues_past_a_per_user_exception(session, monkeypatc
 
 def test_run_wakeup_tick_includes_the_next_day(session, digest_scheduler):
     user = _make_user(session, email="a@example.com", google_sub="a-sub", review_time="09:00", tz="UTC")
-    _add_pending_review(session, _make_entry(session, user.id).id)
+    _add_pending_review(session, _make_entry(session, user.id).id, scheduled_date=_FIXED_AS_OF_DATE)
 
     first_day = datetime(2026, 10, 14, 9, 30, tzinfo=UTC)
     assert digest_scheduler.run_wakeup_tick(session=session, as_of_utc=first_day) == 1

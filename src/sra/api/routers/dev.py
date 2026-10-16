@@ -55,6 +55,9 @@ def _generate_for_upcoming_entries(
         "sets_created": 0,
         "sets_skipped": 0,
         "errors": 0,
+        "interview_plans_created": 0,
+        "interview_plans_skipped": 0,
+        "interview_plans_errored": 0,
     }
     excluded = exclude_entry_ids or set()
 
@@ -181,6 +184,9 @@ def pregenerate_now(
             "sets_created": natural["sets_created"] + upcoming["sets_created"],
             "sets_skipped": natural["sets_skipped"] + upcoming["sets_skipped"],
             "errors": natural["errors"] + upcoming["errors"],
+            "interview_plans_created": natural["interview_plans_created"] + upcoming["interview_plans_created"],
+            "interview_plans_skipped": natural["interview_plans_skipped"] + upcoming["interview_plans_skipped"],
+            "interview_plans_errored": natural["interview_plans_errored"] + upcoming["interview_plans_errored"],
         }
     else:
         merged = natural
