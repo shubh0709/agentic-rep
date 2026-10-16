@@ -1,3 +1,5 @@
+
+# pyright: reportAttributeAccessIssue=false, reportArgumentType=false, reportOptionalMemberAccess=false, reportCallIssue=false, reportGeneralTypeIssues=false
 """SRA-403 nightly quiz pregeneration job: idempotency, per-user scope, error containment."""
 
 from datetime import date, timedelta
@@ -307,3 +309,184 @@ def test_pregenerate_isolates_users_with_owns(monkeypatch, session, seeded_user,
     assert seeded_user.id in owners
     assert other_user.id in owners
     assert len(sets) == 2
+
+
+# ---------------------------------------------------------------------------
+# SRA-802 — Pregen also produces one ``InterviewPlan`` per new QuizSet.
+# Each pregen summary exposes ``interview_plans_created / skipped / errored``.
+# ---------------------------------------------------------------------------
+
+
+phase8 = pytest.mark.phase8  # noqa: E402  -- marker alias below the Phase 4 marker
+
+
+def _patch_interview_planner(monkeypatch, *, items_per_call=2, raise_on_invoke=False, fail_count=0):
+    """Patch ``_get_chat_model`` so each invocation returns a deterministic ``InterviewOutline``.
+
+    When ``raise_on_invoke`` is true, ``invoke`` raises a ``RuntimeError`` for
+    the first ``fail_count`` calls and then returns the outline. Setting
+    ``fail_count`` lower than the number of planner invocations in the test
+    exercises the planner's per-entry error containment (calls past
+    ``fail_count`` must succeed).
+    """
+    from sra.agents import interview_planner as _ip
+
+    state = {"calls": 0}
+
+    class _FakeInterviewPlanner:
+        def with_structured_output(self, schema, **kwargs):
+            return self
+
+        def invoke(self, messages, **kwargs):
+            state["calls"] += 1
+            if raise_on_invoke and state["calls"] <= fail_count:
+                raise RuntimeError(
+                    f"simulated interview planner LLM failure (call {state['calls']})"
+                )
+            from sra.agents.interview_planner import (
+                InterviewOutline,
+                InterviewOutlineItem,
+            )
+
+            return InterviewOutline(
+                items=[
+                    InterviewOutlineItem(
+                        subtopic=f"subtopic-{i}",
+                        difficulty="medium",
+                        focus_prompt=f"focus-{i}",
+                    )
+                    for i in range(items_per_call)
+                ]
+            )
+
+    monkeypatch.setattr(
+        _ip, "_get_chat_model", lambda: _FakeInterviewPlanner()
+    )
+    return _FakeInterviewPlanner()
+
+
+def _outline_for_entry(target: int):
+    from sra.agents.interview_planner import (
+        InterviewOutline,
+        InterviewOutlineItem,
+    )
+
+    return InterviewOutline(
+        items=[
+            InterviewOutlineItem(
+                subtopic=f"sub{i}",
+                difficulty="medium",
+                focus_prompt=f"focus-{i}",
+            )
+            for i in range(target)
+        ]
+    )
+
+
+@phase8
+def test_pregenerate_creates_quiz_set_and_interview_plan_per_entry(
+    monkeypatch, session, seeded_user
+):
+    """Each new QuizSet is paired with one InterviewPlan on the same day."""
+    from sra.agents import interview_planner as _ip
+    from sra.db.models import InterviewPlan
+
+    today = date.today()
+    entry = _seed_entry_with_six_reviews(session, seeded_user.id)
+    assert entry.id is not None
+    _due_review_today(session, entry.id, today)
+    _patch_generate(monkeypatch, drafts=_drafts())
+    # Planner returns 2 items; target_questions is the user's preference (default 6)
+    # so we ask it to return 6 items to match the design.
+    class _PlanOfSix:
+        def with_structured_output(self, schema, **kwargs):
+            return self
+
+        def invoke(self, messages, **kwargs):
+            return _outline_for_entry(6)
+
+    monkeypatch.setattr(_ip, "_get_chat_model", lambda: _PlanOfSix())
+
+    summary = pregenerate_quizzes_for_user(user=seeded_user, today=today, session=session)
+
+    assert summary["sets_created"] == 1
+    assert summary["interview_plans_created"] == 1
+    assert summary["interview_plans_skipped"] == 0
+    assert summary["interview_plans_errored"] == 0
+
+    plans = session.exec(select(InterviewPlan)).all()
+    assert len(plans) == 1
+    quiz_set = session.exec(select(QuizSet).where(QuizSet.entry_id == entry.id)).one()
+    assert plans[0].quiz_set_id == quiz_set.id
+
+
+@phase8
+def test_pregenerate_same_day_does_not_duplicate_interview_plan(
+    monkeypatch, session, seeded_user
+):
+    from sra.agents import interview_planner as _ip
+    from sra.db.models import InterviewPlan
+
+    today = date.today()
+    entry = _seed_entry_with_six_reviews(session, seeded_user.id)
+    assert entry.id is not None
+    _due_review_today(session, entry.id, today)
+    _patch_generate(monkeypatch, drafts=_drafts())
+
+    class _PlanOfSix:
+        def with_structured_output(self, schema, **kwargs):
+            return self
+
+        def invoke(self, messages, **kwargs):
+            return _outline_for_entry(6)
+
+    monkeypatch.setattr(_ip, "_get_chat_model", lambda: _PlanOfSix())
+
+    first = pregenerate_quizzes_for_user(user=seeded_user, today=today, session=session)
+    second = pregenerate_quizzes_for_user(user=seeded_user, today=today, session=session)
+
+    assert first["interview_plans_created"] == 1
+    assert second["interview_plans_skipped"] == 1
+    assert second["interview_plans_created"] == 0
+    plans = session.exec(select(InterviewPlan)).all()
+    assert len(plans) == 1
+
+
+@phase8
+def test_pregenerate_increments_interview_plans_errored_on_planner_failure(
+    monkeypatch, session, seeded_user
+):
+
+    today = date.today()
+    entry_a = _seed_entry_with_six_reviews(session, seeded_user.id)
+    entry_b = _seed_entry_with_six_reviews(session, seeded_user.id)
+    assert entry_a.id is not None and entry_b.id is not None
+    _due_review_today(session, entry_a.id, today)
+    _due_review_today(session, entry_b.id, today)
+    _patch_generate(monkeypatch, drafts=_drafts())
+
+    _patch_interview_planner(monkeypatch, raise_on_invoke=True, fail_count=1)
+
+    summary = pregenerate_quizzes_for_user(user=seeded_user, today=today, session=session)
+
+    assert summary["interview_plans_created"] == 1
+    assert summary["interview_plans_errored"] == 1
+
+
+@phase8
+def test_pregenerate_quizzes_for_day_summary_keys_include_interview_counters(
+    monkeypatch, session, seeded_user
+):
+    today = date.today()
+    _patch_generate(monkeypatch, drafts=_drafts())
+    _patch_interview_planner(monkeypatch, items_per_call=6)
+
+    summary = pregenerate_quizzes_for_day(today=today, session=session)
+
+    for key in (
+        "interview_plans_created",
+        "interview_plans_skipped",
+        "interview_plans_errored",
+    ):
+        assert key in summary
+        assert isinstance(summary[key], int)

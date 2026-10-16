@@ -11,8 +11,14 @@ from typing import TypedDict
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, String, cast, func, or_, select
 
+from sra.agents.interview_planner import InterviewOutline
 from sra.agents.schemas import MCQDraft
 from sra.db.models import (
+    InterviewPlan,
+    InterviewPlanCreate,
+    InterviewTurn,
+    InterviewTurnCreate,
+    InterviewTurnRole,
     QuizAnswer,
     QuizAnswerCreate,
     QuizAttempt,
@@ -515,6 +521,210 @@ def advance_quiz_cursor(*, attempt: QuizAttempt, session: Session) -> QuizAttemp
     return attempt
 
 
+def create_interview_plan(
+    *,
+    quiz_set: QuizSet,
+    outline: InterviewOutline | list[dict],
+    target_questions: int,
+    session: Session,
+) -> InterviewPlan | None:
+    """Insert an ``InterviewPlan`` for ``quiz_set`` or return the existing row.
+
+    The unique ``(quiz_set_id)`` constraint makes the nightly pregen
+    job idempotent — a second invocation the same day races with the
+    first one and the loser reads the winner's row instead of
+    duplicating work.
+
+    Accepts either a typed ``InterviewOutline`` (SRA-802 planner) or a
+    plain ``list[dict]`` (SRA-804 unit tests + lazy-create path). Returns
+    ``None`` when the outline is empty so the caller can count the
+    entry as ``interview_plans_errored`` without persisting a degenerate
+    plan. The outline is stored as the JSON shape the SRA-803
+    conversation graph already knows how to consume
+    (``[{"subtopic", "difficulty", "focus_prompt"}, ...]``).
+    """
+    assert quiz_set.id is not None
+
+    if isinstance(outline, InterviewOutline):
+        payload = [item.model_dump() for item in outline.items]
+    else:
+        payload = [dict(item) for item in outline]
+    if not payload:
+        return None
+
+    plan = InterviewPlan.model_validate(
+        InterviewPlanCreate(
+            quiz_set_id=quiz_set.id,
+            outline=payload,
+            target_questions=target_questions,
+        )
+    )
+    session.add(plan)
+    try:
+        session.commit()
+    except IntegrityError as exc:
+        session.rollback()
+        statement = select(InterviewPlan).where(
+            InterviewPlan.quiz_set_id == quiz_set.id,  # pyright: ignore[reportArgumentType]
+        )
+        existing = session.exec(statement).first()
+        if existing is not None:
+            return existing
+        raise ValueError(
+            f"interview_plan for quiz_set_id={quiz_set.id} conflict could not be resolved"
+        ) from exc
+    session.refresh(plan)
+    return plan
+
+
+def get_or_create_interview_plan(
+    quiz_set_id: int, session: Session
+) -> tuple[QuizSet, InterviewPlan]:
+    """Return ``(QuizSet, InterviewPlan)`` for ``quiz_set_id``, creating a placeholder when missing.
+
+    Raises ``ValueError`` when the parent ``QuizSet`` is missing so the
+    caller can distinguish a 404-style "no quiz set yet" from the
+    happy path. When the ``InterviewPlan`` row is missing, persists a
+    single-item placeholder outline (``subtopic="general"``,
+    ``difficulty="medium"``, ``focus_prompt=entry.summary[:240]``) so
+    the SRA-803 conversation graph always has something to expand;
+    production pregeneration (SRA-802) replaces it with the real
+    outline on the next pregen run.
+    """
+    quiz_set = session.get(QuizSet, quiz_set_id)
+    if quiz_set is None:
+        raise ValueError(f"quiz_set_id {quiz_set_id} does not exist")
+    assert quiz_set.id is not None
+
+    statement = select(InterviewPlan).where(
+        InterviewPlan.quiz_set_id == quiz_set.id,  # pyright: ignore[reportArgumentType]
+    )
+    existing = session.exec(statement).first()
+    if existing is not None:
+        return quiz_set, existing
+
+    entry = session.get(StudyEntry, quiz_set.entry_id) if quiz_set.entry_id else None
+    focus_prompt = (entry.summary[:240] if entry is not None and entry.summary else "general recap")
+    placeholder = [
+        {"subtopic": "general", "difficulty": "medium", "focus_prompt": focus_prompt},
+    ]
+    plan = InterviewPlan.model_validate(
+        InterviewPlanCreate(
+            quiz_set_id=quiz_set.id,
+            outline=placeholder,
+            target_questions=1,
+        )
+    )
+    session.add(plan)
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        existing = session.exec(statement).first()
+        if existing is not None:
+            return quiz_set, existing
+        raise
+    session.refresh(plan)
+    return quiz_set, plan
+
+
+def append_interview_turn(
+    *,
+    attempt: QuizAttempt,
+    role: str,
+    content: str,
+    score: int | None = None,
+    outline_index: int | None = None,
+    session: Session,
+) -> InterviewTurn:
+    """Append one ``InterviewTurn`` row for ``attempt`` and return the persisted row.
+
+    Validates ``role`` against :class:`InterviewTurnRole` so a typo can
+    never produce a row that fails the ``ck_interview_turns_role``
+    CHECK constraint on commit. ``content`` is stripped; an empty
+    value after stripping raises ``ValueError``. ``created_at`` defaults
+    to ``_utcnow()``.
+    """
+    if role not in InterviewTurnRole:
+        raise ValueError(
+            f"role {role!r} is not a valid InterviewTurnRole; expected one of {[r.value for r in InterviewTurnRole]}"
+        )
+    stripped = content.strip()
+    if not stripped:
+        raise ValueError("content must be non-empty after stripping")
+
+    assert attempt.id is not None
+    turn = InterviewTurn.model_validate(
+        InterviewTurnCreate(
+            attempt_id=attempt.id,
+            role=role,
+            content=stripped,
+            score=score,
+            outline_index=outline_index,
+        )
+    )
+    session.add(turn)
+    try:
+        session.commit()
+    except IntegrityError as exc:
+        session.rollback()
+        raise ValueError(
+            f"interview_turn for attempt_id={attempt.id} violated a constraint: {exc}"
+        ) from exc
+    session.refresh(turn)
+    return turn
+
+
+def get_interview_turns(attempt_id: int, session: Session) -> list[InterviewTurn]:
+    """Return ``interview_turns`` rows for ``attempt_id`` ordered by ``id`` ASC.
+
+    An empty attempt returns ``[]`` — never raises on a missing attempt
+    id because the SRA-805 router calls this on every turn before the
+    first row is inserted and the SRA-803 graph resumes a closed tab
+    against an attempt that may legitimately have no turns.
+    """
+    statement = (
+        select(InterviewTurn)
+        .where(InterviewTurn.attempt_id == attempt_id)  # pyright: ignore[reportArgumentType]
+        .order_by(InterviewTurn.id)  # pyright: ignore[reportArgumentType]
+    )
+    return list(session.exec(statement).all())
+
+
+def complete_interview_attempt(
+    *,
+    attempt: QuizAttempt,
+    mean_score: float,
+    session: Session,
+) -> QuizAttempt:
+    """Stamp ``attempt.completed_at`` and ``attempt.score`` (rounded mean, clamped [0,100]).
+
+    ``mean_score`` is rounded to the nearest integer and clamped to
+    ``[0, 100]`` so a stray ``None`` or out-of-range float from the
+    caller cannot corrupt the attempt. Raises ``ValueError`` when
+    ``attempt.completed_at`` is already set so the SRA-803 graph and
+    the SRA-805 router cannot silently double-complete an attempt.
+    """
+    if attempt.completed_at is not None:
+        raise ValueError(
+            f"attempt_id {attempt.id} is already completed at {attempt.completed_at.isoformat()}"
+        )
+
+    score = round(mean_score)
+    if score < 0:
+        score = 0
+    elif score > 100:
+        score = 100
+
+    attempt.score = score
+    attempt.completed_at = _utcnow()
+
+    session.add(attempt)
+    session.commit()
+    session.refresh(attempt)
+    return attempt
+
+
 def _demo_user_dependents_minimum(user_id: int, session: Session) -> datetime | None:
     """Return the minimum related timestamp for a user, or None when no dependents are attached.
 
@@ -586,10 +796,11 @@ def delete_user_cascade(user: User, session: Session) -> None:
     """Delete ``user`` and every dependent row in FK-safe order.
 
     The cascade touches ``study_entries`` (which clears ``review_schedules``),
-    ``quiz_sets`` (which clears ``quiz_questions``), and ``quiz_attempts``
-    (which clears ``quiz_answers``). A detached/already-deleted user raises
-    ``UserNotFoundError`` so callers can distinguish a successful delete from a
-    no-op. The caller owns the surrounding transaction / commit.
+    ``quiz_sets`` (which clears ``quiz_questions``), ``quiz_attempts``
+    (which clears ``quiz_answers`` and ``interview_turns``), and
+    ``interview_plans``. A detached/already-deleted user raises
+    ``UserNotFoundError`` so callers can distinguish a successful delete from
+    a no-op. The caller owns the surrounding transaction / commit.
     """
     if user.id is None or session.get(User, user.id) is None:
         raise UserNotFoundError(f"user {getattr(user, 'id', None)!r} is not present in this session")
@@ -615,6 +826,15 @@ def delete_user_cascade(user: User, session: Session) -> None:
             )
         ).all():
             session.delete(answer)
+        # interview_turns shares the same FK target and has the same
+        # no-default-ondelete shape, so clear them alongside quiz_answers
+        # to keep the cascade portable to engines without PRAGMA FKs.
+        for turn in session.exec(
+            select(InterviewTurn).where(
+                InterviewTurn.attempt_id.in_(attempt_ids)  # type: ignore[arg-type]
+            )
+        ).all():
+            session.delete(turn)
 
     # quiz_attempts must die first so the quiz_sets->quiz_attempts link is
     # free when we clear quiz_sets.
@@ -625,7 +845,10 @@ def delete_user_cascade(user: User, session: Session) -> None:
 
     # quiz_sets and the dependent quiz_questions row by row (no FK cascade from
     # the platform default; SQLAlchemy ORM cascade may not be configured for
-    # quiz_set -> questions).
+    # quiz_set -> questions). InterviewPlans reference the same quiz_set_id
+    # FK with the same no-default-ondelete shape, so clear them alongside
+    # quiz_questions to keep the cascade portable to engines without
+    # PRAGMA FKs.
     for quiz_set in session.exec(
         select(QuizSet).where(QuizSet.user_id == user_id)
     ).all():
@@ -633,6 +856,12 @@ def delete_user_cascade(user: User, session: Session) -> None:
             select(QuizQuestion).where(QuizQuestion.quiz_set_id == quiz_set.id)
         ).all():
             session.delete(question)
+        for plan in session.exec(
+            select(InterviewPlan).where(
+                InterviewPlan.quiz_set_id == quiz_set.id  # pyright: ignore[reportArgumentType]
+            )
+        ).all():
+            session.delete(plan)
         session.delete(quiz_set)
 
     # study_entries and the dependent review_schedules.
