@@ -14,6 +14,20 @@ from typing import Any, Literal, Protocol
 CaptureState = Literal["idle", "recording", "processing", "closed"]
 Work = Callable[[], None]
 ProcessRecording = Callable[[Path], list[dict[str, Any]]]
+Dispatch = Callable[[Work], None]
+
+
+def _select_quiz_set_id(dispatch: Dispatch) -> int | None:
+    """Return the ``quiz_set_id`` an interview should start against.
+
+    SRA-808 wires the menu-bar entry; a future ticket (SRA-807's
+    dashboard sister or a dedicated quiz-set submenu) will pick the
+    target ``quiz_set_id`` from the user's digest or a submenu. Until
+    that lands the desktop surfaces a clean status message instead of
+    guessing an id that would silently 404 against a freshly installed
+    server.
+    """
+    return None
 
 
 class _EventTypeSpec(ctypes.Structure):
@@ -363,6 +377,7 @@ class SpacedRepetitionAgentApp:
                 self.hotkey_attempted = False
                 self.status_item = rumps.MenuItem("Idle")
                 self.toggle_item = rumps.MenuItem("Start recording", callback=self.toggle_capture)
+                self.start_interview_item = rumps.MenuItem("Start interview", callback=self.begin_interview)
                 self.sign_in_item = rumps.MenuItem("Sign in", callback=self.begin_sign_in)
                 self.restore_item = rumps.MenuItem("Use saved sign-in", callback=self.begin_restore)
                 self.sign_out_item = rumps.MenuItem("Sign out", callback=self.begin_sign_out)
@@ -370,6 +385,9 @@ class SpacedRepetitionAgentApp:
                 self.account_item = rumps.MenuItem("Account: signed out")
                 # Keep Quit in the established position for existing desktop
                 # adapters while adding authentication actions after it.
+                # SRA-808 adds the "Start interview" item at the end so the
+                # existing test indices for status/toggle/quit/account/sign-in
+                # remain stable; a future ticket may reorder these for UX.
                 self.menu = [
                     self.status_item,
                     self.toggle_item,
@@ -379,6 +397,7 @@ class SpacedRepetitionAgentApp:
                     self.restore_item,
                     self.sign_out_item,
                     self.cancel_sign_in_item,
+                    self.start_interview_item,
                 ]
                 self.keychain = MacOSKeychainCredentialStore(service_prefix=settings.keychain_service_prefix)
                 self.hotkey = _MacOSHotKey(combo, lambda: self.callbacks.put(self.request_capture))
@@ -457,6 +476,72 @@ class SpacedRepetitionAgentApp:
                     self.callbacks.put(lambda: self._complete_auth(message))
 
                 self.submit(work)
+
+            def begin_interview(self, _sender: Any) -> None:
+                """SRA-808 — request an interview; status surfaces via show_status."""
+                self.callbacks.put(self._start_interview)
+
+            def _start_interview(self) -> None:
+                if self.auth_busy or self.controller.state != "idle":
+                    self.show_status("Finish the current operation before starting an interview")
+                    return
+                if self.account is None:
+                    self.show_status("Sign in first to start an interview")
+                    return
+                quiz_set_id = _select_quiz_set_id(self.callbacks.put)
+                if quiz_set_id is None:
+                    self.show_status("No quiz set available for an interview yet")
+                    return
+                self.auth_busy = True
+                self.show_status("Starting interview")
+                credential = self.account.credential
+
+                def work() -> None:
+                    from sra.capture import voice_quiz_client
+                    from sra.client import api_client as _api_module
+
+                    class _CredentialedClient:
+                        def __init__(self, credential: str) -> None:
+                            self._credential = credential
+
+                        def start_interview_attempt(self, quiz_set_id: int) -> dict[str, Any]:
+                            return _api_module.start_interview_attempt(
+                                quiz_set_id, credential=self._credential
+                            )
+
+                        def send_interview_turn(
+                            self, attempt_id: int, action: str, answer_text: str | None
+                        ) -> dict[str, Any]:
+                            return _api_module.send_interview_turn(
+                                attempt_id, action, answer_text, credential=self._credential
+                            )
+
+                        def get_interview(self, attempt_id: int) -> dict[str, Any]:
+                            return _api_module.get_interview(attempt_id, credential=self._credential)
+
+                    try:
+                        result = voice_quiz_client.run_interview(
+                            quiz_set_id=quiz_set_id,
+                            api_client=_CredentialedClient(credential),
+                        )
+                        message = (
+                            f"Interview complete — score {result['score']} "
+                            f"({result['answered_count']} answered, "
+                            f"{result['remaining_count']} remaining)"
+                        )
+                    except voice_quiz_client.VoiceQuizError as exc:
+                        message = f"Interview failed: {exc}"
+                    except Exception as exc:
+                        message = f"Interview failed unexpectedly: {exc}"
+                    self.callbacks.put(lambda: self._complete_interview(message))
+
+                self.submit(work)
+
+            def _complete_interview(self, message: str) -> None:
+                if self.controller.state == "closed":
+                    return
+                self.auth_busy = False
+                self.show_status(message)
 
             def cancel_sign_in(self, _sender: Any) -> None:
                 self.auth_cancel.set()

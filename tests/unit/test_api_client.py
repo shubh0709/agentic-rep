@@ -444,3 +444,142 @@ def test_client_methods_pass_credentials_only_in_bearer_header_not_in_url(http_b
     assert secret not in str(requests[0].url)
     assert secret not in requests[0].content.decode()
 
+
+# ---------------------------------------------------------------------------
+# SRA-808 — Interview client API extensions: ``start_interview_attempt``,
+# ``send_interview_turn``, ``get_interview``.
+# ---------------------------------------------------------------------------
+
+
+phase8 = pytest.mark.phase8  # noqa: E402  -- marker alias below the Phase 5 marker
+
+
+@phase8
+def test_start_interview_attempt_posts_mode_interview_and_returns_dict(http_boundary):
+    payload = {
+        "attempt_id": 42,
+        "question_text": "first q",
+        "transcript_so_far": [],
+    }
+    clients, requests = http_boundary(
+        lambda request: httpx.Response(201, json=payload)
+    )
+
+    result = api_client.start_interview_attempt(quiz_set_id=7, credential="token-1")
+
+    assert result == payload
+    assert len(requests) == 1
+    request = requests[0]
+    assert request.method == "POST"
+    assert str(request.url) == "http://testserver/api/v1/quiz/7/attempts"
+    assert json.loads(request.content) == {"mode": "interview"}
+    assert request.headers["authorization"] == "Bearer token-1"
+    assert len(clients) == 1 and clients[0].is_closed
+
+
+@phase8
+def test_send_interview_turn_posts_action_and_answer_text(http_boundary):
+    payload = {
+        "question_text": "next",
+        "score": 80,
+        "rationale": "ok",
+        "feedback": "good",
+        "finished": False,
+        "summary": None,
+        "transcript_so_far": [],
+    }
+    clients, requests = http_boundary(
+        lambda request: httpx.Response(200, json=payload)
+    )
+
+    result = api_client.send_interview_turn(
+        attempt_id=42, action="answer", answer_text="the answer", credential="token-1"
+    )
+
+    assert result == payload
+    assert len(requests) == 1
+    request = requests[0]
+    assert request.method == "POST"
+    assert str(request.url) == "http://testserver/api/v1/quiz/attempts/42/interview-turn"
+    assert json.loads(request.content) == {"action": "answer", "answer_text": "the answer"}
+    assert request.headers["authorization"] == "Bearer token-1"
+
+
+@phase8
+def test_send_interview_turn_next_action_omits_answer_text(http_boundary):
+    clients, requests = http_boundary(
+        lambda request: httpx.Response(200, json={"question_text": "q", "score": None, "finished": False})
+    )
+
+    api_client.send_interview_turn(
+        attempt_id=42, action="next", answer_text=None, credential="token-1"
+    )
+
+    body = json.loads(requests[0].content)
+    assert body["action"] == "next"
+    assert body.get("answer_text") is None
+
+
+@phase8
+def test_get_interview_gets_attempt_endpoint(http_boundary):
+    payload = {
+        "plan": {"id": 1, "quiz_set_id": 1, "outline": [], "target_questions": 0, "created_at": "2026-10-14T12:00:00Z"},
+        "turns": [],
+        "summary": None,
+        "attempt": {
+            "id": 42,
+            "quiz_set_id": 1,
+            "mode": "interview",
+            "started_at": "2026-10-14T12:00:00Z",
+            "completed_at": None,
+            "score": None,
+            "total_questions": 1,
+            "cursor_on_plan": 0,
+        },
+    }
+    clients, requests = http_boundary(lambda request: httpx.Response(200, json=payload))
+
+    result = api_client.get_interview(attempt_id=42, credential="token-1")
+
+    assert result == payload
+    assert len(requests) == 1
+    request = requests[0]
+    assert request.method == "GET"
+    assert str(request.url) == "http://testserver/api/v1/quiz/attempts/42/interview"
+    assert request.headers["authorization"] == "Bearer token-1"
+
+
+@pytest.mark.parametrize("status", [400, 401, 403, 404, 409, 422, 429, 500])
+@phase8
+def test_interview_client_methods_raise_typed_error_on_4xx_or_5xx(
+    http_boundary, status
+):
+    clients, requests = http_boundary(
+        lambda request: httpx.Response(status, json={"detail": "boom"})
+    )
+
+    with pytest.raises(api_client.ApiClientError) as caught:
+        api_client.start_interview_attempt(quiz_set_id=1, credential="token-1")
+
+    assert caught.value.status_code == status
+    assert len(requests) == 1
+
+
+@phase8
+def test_interview_client_methods_pass_credentials_only_in_bearer_header(http_boundary):
+    clients, requests = http_boundary(
+        lambda request: httpx.Response(201, json={"attempt_id": 1, "question_text": "q", "transcript_so_far": []})
+    )
+    secret = "server-issued-application-credential"
+    api_client.start_interview_attempt(quiz_set_id=1, credential=secret)
+    assert requests[0].headers["authorization"] == f"Bearer {secret}"
+    assert secret not in str(requests[0].url)
+    assert secret not in requests[0].content.decode()
+
+
+@phase8
+def test_interview_client_module_exposes_the_required_helpers():
+    """TDD: the desktop wrapper must export the three Phase 8 methods."""
+    for name in ("start_interview_attempt", "send_interview_turn", "get_interview"):
+        assert hasattr(api_client, name), name
+

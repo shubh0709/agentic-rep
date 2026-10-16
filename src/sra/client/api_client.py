@@ -504,3 +504,126 @@ def send_voice_turn(
     if response.status_code == 429:
         raise _rate_limited_error(response, url)
     raise _http_error(response, url, "voice turn")
+
+
+def start_interview_attempt(
+    quiz_set_id: int,
+    *,
+    credential: str | None = None,
+) -> dict[str, Any]:
+    """SRA-808: POST /api/v1/quiz/{quiz_set_id}/attempts {"mode": "interview"}.
+
+    Returns the server's `{attempt_id, question_text, transcript_so_far}`
+    payload for the SRA-805 interview route. The 400
+    "This endpoint requires an interview mode attempt" leftover maps to
+    ApiClientError("interview_mode_required") so the desktop fails fast
+    against a server that has not landed Phase 8. 401 -> auth_required;
+    429 -> rate_limited.
+    """
+    response, url = _authed_post(
+        f"/api/v1/quiz/{quiz_set_id}/attempts", {"mode": "interview"}, credential
+    )
+
+    if response.status_code in (200, 201):
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise ApiClientError(
+                "Invalid JSON in the interview attempt response.",
+                status_code=response.status_code,
+            ) from exc
+        if not isinstance(payload, dict):
+            raise ApiClientError(
+                "Interview attempt response was not an object.",
+                status_code=response.status_code,
+            )
+        return payload
+
+    if response.status_code == 400:
+        detail = _extract_detail(response)
+        raise ApiClientError(
+            f"interview_mode_required: {detail if detail is not None else response.text}",
+            status_code=400,
+            detail=detail,
+        )
+    if response.status_code == 401:
+        raise _auth_required_error(response, url)
+    if response.status_code == 429:
+        raise _rate_limited_error(response, url)
+    raise _http_error(response, url, "interview attempt")
+
+
+def send_interview_turn(
+    attempt_id: int,
+    action: str,
+    answer_text: str | None = None,
+    *,
+    credential: str | None = None,
+) -> dict[str, Any]:
+    """SRA-808: POST /api/v1/quiz/attempts/{attempt_id}/interview-turn.
+
+    Body `{"action": action, "answer_text": answer_text}`. ``answer_text``
+    is forwarded verbatim and may be ``None`` for non-``"answer"`` actions
+    (e.g. ``"next"``). Returns the server's `InterviewTurnResponse` dict.
+    409 ("Attempt already completed") maps to
+    ApiClientError("attempt_completed"). 401 -> auth_required;
+    429 -> rate_limited.
+    """
+    response, url = _authed_post(
+        f"/api/v1/quiz/attempts/{attempt_id}/interview-turn",
+        {"action": action, "answer_text": answer_text},
+        credential,
+    )
+
+    if response.status_code == 200:
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise ApiClientError("Invalid JSON in the interview turn response.", status_code=200) from exc
+        if not isinstance(payload, dict):
+            raise ApiClientError("Interview turn response was not an object.", status_code=200)
+        return payload
+
+    if response.status_code == 409:
+        detail = _extract_detail(response)
+        raise ApiClientError(
+            f"attempt_completed: {detail if detail is not None else 'Attempt already completed.'}",
+            status_code=409,
+            detail=detail,
+        )
+    if response.status_code == 401:
+        raise _auth_required_error(response, url)
+    if response.status_code == 429:
+        raise _rate_limited_error(response, url)
+    raise _http_error(response, url, "interview turn")
+
+
+def get_interview(
+    attempt_id: int,
+    *,
+    credential: str | None = None,
+) -> dict[str, Any]:
+    """SRA-808: GET /api/v1/quiz/attempts/{attempt_id}/interview.
+
+    Returns the server's `InterviewDetailOut` dict (`plan`, `turns`,
+    `summary`, `attempt`). 401 -> auth_required; 429 -> rate_limited;
+    any other non-200 -> ApiClientError preserving the status code.
+    """
+    response, url = _authed_get(
+        f"/api/v1/quiz/attempts/{attempt_id}/interview", credential
+    )
+
+    if response.status_code == 200:
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise ApiClientError("Invalid JSON in the interview response.", status_code=200) from exc
+        if not isinstance(payload, dict):
+            raise ApiClientError("Interview response was not an object.", status_code=200)
+        return payload
+
+    if response.status_code == 401:
+        raise _auth_required_error(response, url)
+    if response.status_code == 429:
+        raise _rate_limited_error(response, url)
+    raise _http_error(response, url, "interview")

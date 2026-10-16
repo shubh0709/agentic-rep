@@ -55,8 +55,32 @@ class _VoiceQuizApiClient(Protocol):
     ) -> dict[str, Any]: ...
 
 
+class _InterviewApiClient(Protocol):
+    """Duck-typed shape ``run_interview`` accepts as ``api_client``.
+
+    Tests substitute a ``SimpleNamespace`` with the same methods; the real
+    desktop caller passes the module-level ``sra.client.api_client``
+    helpers, which expose the same callables. ``credential`` is
+    keyword-only on the real helpers but is not required here, so callers
+    invoke the helpers positionally with no credential.
+    """
+
+    def start_interview_attempt(self, quiz_set_id: int) -> dict[str, Any]: ...
+
+    def send_interview_turn(
+        self, attempt_id: int, action: str, answer_text: str | None
+    ) -> dict[str, Any]: ...
+
+    def get_interview(self, attempt_id: int) -> dict[str, Any]: ...
+
+
 Recorder = Callable[[], Path]
 Transcriber = Callable[[Path], str]
+
+# SRA-808 — cap the spoken question so ``say`` finishes within ~25 seconds.
+# The full question is always printed to the terminal so nothing is lost.
+SPOKEN_QUESTION_MAX_CHARS = 280
+SPOKEN_TRUNCATION_ELLIPSIS = "\u2026"
 
 
 def record_answer(*, recorder: Recorder | None = None) -> Path:
@@ -73,6 +97,13 @@ def record_answer(*, recorder: Recorder | None = None) -> Path:
         return recorder()
     except Exception as exc:
         raise VoiceQuizError("recorder_failed", str(exc)) from exc
+
+
+def _truncate_for_speech(text: str, *, limit: int = SPOKEN_QUESTION_MAX_CHARS) -> str:
+    """Return ``text`` if it fits in ``limit`` chars, else the first ``limit`` chars + ellipsis."""
+    if len(text) <= limit:
+        return text
+    return text[:limit] + SPOKEN_TRUNCATION_ELLIPSIS
 
 
 def run_voice_quiz(
@@ -129,6 +160,90 @@ def run_voice_quiz(
         feedback_text = response.get("feedback_text", "")
         next_question_text = response.get("next_question_text", "")
         tts.speak(f"{feedback_text}. {next_question_text}")
+
+
+def run_interview(
+    quiz_set_id: int,
+    *,
+    api_client: _InterviewApiClient | None = None,
+    recorder: Recorder | None = None,
+    transcriber: Transcriber | None = None,
+) -> dict[str, int]:
+    """Drive a full SRA-808 interview attempt end-to-end.
+
+    Speaks the first question (truncated to 280 chars + ellipsis when
+    long; full text always printed to the terminal), then loops:
+    record one answer, transcribe the WAV, send the transcript to the
+    server as ``action="answer"``, speak the feedback, then either
+    speak the next question or the final summary when
+    ``finished=True``. Returns ``{score, answered_count, remaining_count}``
+    where ``answered_count`` is the number of ``"answer"`` turns posted
+    and ``remaining_count`` is ``max(len(plan.outline) - answered_count, 0)``
+    from the SRA-805 interview-detail endpoint. Raises ``VoiceQuizError`` on
+    any recorder, transcription, or server failure inside the loop; the
+    underlying error is chained via ``__cause__``.
+    """
+    if api_client is None:
+        from sra.client import api_client as _api_module
+
+        client: _InterviewApiClient = _api_module
+    else:
+        client = api_client
+
+    if transcriber is None:
+        transcriber = transcribe
+
+    start = client.start_interview_attempt(quiz_set_id)
+    attempt_id = start["attempt_id"]
+    question_text = start.get("question_text") or ""
+
+    tts.speak(_truncate_for_speech(question_text))
+    print(question_text, flush=True)
+
+    answered_count = 0
+    final_score = 0
+
+    while True:
+        wav_path = record_answer(recorder=recorder)
+
+        try:
+            answer_text = transcriber(wav_path)
+        except Exception as exc:
+            raise VoiceQuizError("transcription_failed", str(exc)) from exc
+
+        try:
+            response = client.send_interview_turn(attempt_id, "answer", answer_text)
+        except Exception as exc:
+            code = _classify_server_error(exc)
+            raise VoiceQuizError(code, str(exc)) from exc
+
+        answered_count += 1
+        feedback = response.get("feedback") or ""
+        if feedback:
+            tts.speak(feedback)
+
+        if response.get("finished"):
+            summary = response.get("summary") or ""
+            if summary:
+                tts.speak(summary)
+            final_score = int(response.get("score") or 0)
+            break
+
+        next_question = response.get("question_text") or ""
+        if next_question:
+            tts.speak(_truncate_for_speech(next_question))
+            print(next_question, flush=True)
+
+    detail = client.get_interview(attempt_id)
+    plan = detail.get("plan") or {}
+    outline = plan.get("outline") or []
+    remaining_count = max(len(outline) - answered_count, 0)
+
+    return {
+        "score": final_score,
+        "answered_count": answered_count,
+        "remaining_count": remaining_count,
+    }
 
 
 def _classify_server_error(exc: BaseException) -> str:
