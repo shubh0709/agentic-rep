@@ -22,6 +22,7 @@ from sra.db.models import User
 _CREDENTIAL_ISSUER = "spaced-repetition-agent"
 _CREDENTIAL_AUDIENCE = "sra-api"
 _CREDENTIAL_PURPOSE = "application-credential"
+_CREDENTIAL_REFRESH_PURPOSE = "refresh-credential"
 
 
 class AuthError(Exception):
@@ -46,6 +47,15 @@ class CredentialClaims:
     """Trusted claims recovered from a server-issued application credential."""
 
     user_id: int
+    expires_at: datetime
+
+
+@dataclass(frozen=True)
+class RefreshClaims:
+    """Trusted claims recovered from a server-issued refresh credential."""
+
+    user_id: int
+    jti: str
     expires_at: datetime
 
 
@@ -212,6 +222,81 @@ def verify_app_credential(
     return CredentialClaims(user_id=subject, expires_at=datetime.fromtimestamp(expires, tz=UTC))
 
 
+def issue_refresh_credential(
+    user_id: int,
+    jti: str,
+    *,
+    signing_secret: str,
+    ttl_seconds: int,
+    now: datetime,
+) -> str:
+    """Issue a signed refresh credential bound to one user and one jti.
+
+    The refresh credential's purpose is distinct from the access credential so
+    the access verifier rejects it and the refresh verifier rejects an access
+    credential. The random nonce avoids the user_id appearing in plaintext
+    inside the opaque serialized value.
+    """
+    if user_id <= 0 or ttl_seconds <= 0 or not jti or not jti.strip():
+        raise AuthError("Invalid refresh credential parameters")
+    issued_at = int(now.timestamp())
+    while True:
+        credential = _sign(
+            {
+                "iss": _CREDENTIAL_ISSUER,
+                "aud": _CREDENTIAL_AUDIENCE,
+                "purpose": _CREDENTIAL_REFRESH_PURPOSE,
+                "sub": user_id,
+                "jti": jti,
+                "iat": issued_at,
+                "exp": issued_at + ttl_seconds,
+                "nonce": secrets.token_urlsafe(12),
+            },
+            signing_secret,
+        )
+        if user_id < 10 or str(user_id) not in credential:
+            return credential
+
+
+def verify_refresh_credential(
+    credential: str, *, signing_secret: str, now: datetime
+) -> RefreshClaims:
+    """Verify signature, fixed claims, jti, subject, and expiry.
+
+    Rejects an access credential (different ``purpose``) so a refresh credential
+    is the only thing that satisfies :func:`require_refresh_token`.
+    """
+    payload = _unsign(credential, signing_secret)
+    try:
+        subject = payload["sub"]
+        jti = payload["jti"]
+        expires = payload["exp"]
+        valid = (
+            payload["iss"] == _CREDENTIAL_ISSUER
+            and payload["aud"] == _CREDENTIAL_AUDIENCE
+            and payload["purpose"] == _CREDENTIAL_REFRESH_PURPOSE
+            and isinstance(subject, int)
+            and not isinstance(subject, bool)
+            and subject > 0
+            and isinstance(jti, str)
+            and bool(jti)
+            and isinstance(expires, int)
+            and expires > int(now.timestamp())
+        )
+    except (KeyError, TypeError):
+        valid = False
+        subject = 0
+        jti = ""
+        expires = 0
+    if not valid:
+        raise AuthError("Invalid or expired authentication credential")
+    return RefreshClaims(
+        user_id=subject,
+        jti=jti,
+        expires_at=datetime.fromtimestamp(expires, tz=UTC),
+    )
+
+
 class CompletionCodeStore:
     """In-memory owner of short-lived, one-use desktop completion codes."""
 
@@ -245,6 +330,70 @@ class CompletionCodeStore:
     def _discard_expired(self) -> None:
         now = self.clock()
         self._codes = {code: record for code, record in self._codes.items() if record[2] > now}
+
+
+class RefreshTokenStore:
+    """In-memory owner of long-lived, single-use refresh-token jti values.
+
+    Mirrors :class:`OAuthStateStore` and :class:`CompletionCodeStore`: a Lock
+    guards the dict, the supplied clock drives expiry, and a single exchange
+    always deletes the record (even on a wrong-origin mismatch, so a replay
+    cannot be observed). A second submission of a consumed ``jti`` is detected
+    as a reuse of a rotated token; in that case the whole refresh family for
+    that ``user_id`` is revoked to invalidate a leaked credential before the
+    next legitimate refresh.
+    """
+
+    def __init__(self, *, ttl_seconds: int, clock: Callable[[], datetime]) -> None:
+        if ttl_seconds <= 0:
+            raise ValueError("ttl_seconds must be positive")
+        self.ttl_seconds = ttl_seconds
+        self.clock = clock
+        self._jtis: dict[str, tuple[int, str, datetime]] = {}
+        self._lock = Lock()
+
+    def issue(self, *, user_id: int, server_origin: str) -> str:
+        """Return a fresh, single-use jti bound to one user and server origin."""
+        with self._lock:
+            self._discard_expired()
+            jti = secrets.token_urlsafe(24)
+            self._jtis[jti] = (user_id, server_origin, self.clock() + timedelta(seconds=self.ttl_seconds))
+        return jti
+
+    def consume(self, jti: str, *, server_origin: str) -> tuple[int, str]:
+        """Atomically consume the jti; raise on mismatch, expiry, or replay.
+
+        A successful consume returns ``(user_id, server_origin)`` and removes
+        the jti from the store. A failed consume also removes the jti so a
+        second presentation is always rejected, which is the trigger for
+        :meth:`revoke_family` to invalidate the leaked chain.
+        """
+        with self._lock:
+            record = self._jtis.pop(jti, None)
+        if record is None:
+            raise AuthError("Invalid or expired refresh token")
+        user_id, expected_origin, expires_at = record
+        if (
+            not hmac.compare_digest(expected_origin, server_origin)
+            or self.clock() >= expires_at
+        ):
+            raise AuthError("Invalid or expired refresh token")
+        return user_id, server_origin
+
+    def revoke_family(self, user_id: int) -> int:
+        """Revoke every active jti for one user. Returns the number removed."""
+        with self._lock:
+            self._discard_expired()
+            removed = 0
+            for jti, record in list(self._jtis.items()):
+                if record[0] == user_id:
+                    del self._jtis[jti]
+                    removed += 1
+        return removed
+
+    def _discard_expired(self) -> None:
+        now = self.clock()
+        self._jtis = {jti: record for jti, record in self._jtis.items() if record[2] > now}
 
 
 class OAuthStateStore:

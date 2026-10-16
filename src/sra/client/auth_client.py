@@ -35,6 +35,15 @@ class CredentialStore(Protocol):
 
     def save(self, *, server_origin: str, account: str, credential: str) -> None: ...
 
+    def save_pair(
+        self,
+        *,
+        server_origin: str,
+        account: str,
+        credential: str,
+        refresh_credential: str,
+    ) -> None: ...
+
     def delete(self, *, server_origin: str, account: str) -> None: ...
 
 
@@ -437,6 +446,42 @@ class MacOSKeychainCredentialStore:
             backend.set_password(service, self._ACTIVE_ACCOUNT, credential)  # type: ignore[attr-defined]
         except Exception:
             raise DesktopAuthError("The sign-in could not be saved securely.") from None
+
+    def save_pair(
+        self,
+        *,
+        server_origin: str,
+        account: str,
+        credential: str,
+        refresh_credential: str,
+    ) -> None:
+        """Persist a rotated access + refresh pair atomically.
+
+        Writes the access credential under the account key and the refresh
+        credential under a server-partitioned sibling key so the next call to
+        :meth:`load_refresh_credential` recovers it after a process restart.
+        Both writes are attempted in sequence; if the second fails the
+        caller sees the existing typed :class:`DesktopAuthError`.
+        """
+        try:
+            backend = self._keyring()
+            service = self._service(server_origin)
+            backend.set_password(service, account, credential)  # type: ignore[attr-defined]
+            backend.set_password(service, self._ACTIVE_ACCOUNT, credential)  # type: ignore[attr-defined]
+            backend.set_password(service, f"{account}__refresh", refresh_credential)  # type: ignore[attr-defined]
+        except Exception:
+            raise DesktopAuthError("The refreshed sign-in could not be saved securely.") from None
+
+    def load_refresh_credential(self, *, server_origin: str, account: str) -> str | None:
+        try:
+            value = self._keyring().get_password(  # type: ignore[attr-defined]
+                self._service(server_origin), f"{account}__refresh",
+            )
+        except Exception:
+            raise DesktopAuthError("The saved sign-in could not be read securely.") from None
+        if value is not None and not isinstance(value, str):
+            raise DesktopAuthError("The saved sign-in could not be read securely.")
+        return value or None
 
     def load_default(self, *, server_origin: str) -> str | None:
         """Load the last active credential for this origin after an app restart."""

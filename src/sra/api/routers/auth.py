@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hmac
 from datetime import UTC, datetime
+from typing import Protocol
 from urllib.parse import urlencode, urlsplit
 
 import httpx
@@ -21,10 +22,13 @@ from sra.auth.google_oauth import (
     LoginAttempt,
     OAuthStateStore,
     ProviderError,
+    RefreshTokenStore,
     build_authorization_url,
     issue_app_credential,
+    issue_refresh_credential,
     upsert_google_user,
     verify_google_identity,
+    verify_refresh_credential,
 )
 from sra.config import Settings, get_settings
 from sra.db.models import User
@@ -35,6 +39,14 @@ _state_store: OAuthStateStore | None = None
 _state_store_config: tuple[str, int] | None = None
 _completion_store: CompletionCodeStore | None = None
 _completion_ttl: int | None = None
+_refresh_store: RefreshTokenStore | None = None
+_refresh_store_config: tuple[str, int] | None = None
+
+REFRESH_COOKIE_NAME = "sra_refresh"
+
+
+class _RefreshStoreResolver(Protocol):
+    """Minimal interface the auth router needs from the refresh store."""
 
 
 class DesktopExchangeRequest(BaseModel):
@@ -43,8 +55,10 @@ class DesktopExchangeRequest(BaseModel):
 
 class CredentialResponse(BaseModel):
     credential: str
+    refresh_credential: str
     token_type: str = "Bearer"
     expires_in: int
+    refresh_expires_in: int
 
 
 class UserResponse(BaseModel):
@@ -63,8 +77,15 @@ def _server_origin(settings: Settings) -> str:
     return f"{parsed.scheme}://{parsed.netloc}"
 
 
-def _stores(settings: Settings) -> tuple[OAuthStateStore, CompletionCodeStore]:
+def _refresh_cookie_name(settings: Settings) -> str:
+    return REFRESH_COOKIE_NAME
+
+
+def _stores(
+    settings: Settings,
+) -> tuple[OAuthStateStore, CompletionCodeStore, RefreshTokenStore]:
     global _completion_store, _completion_ttl, _state_store, _state_store_config
+    global _refresh_store, _refresh_store_config
     secret = settings.auth_signing_secret.get_secret_value()
     state_config = (secret, settings.oauth_state_ttl_seconds)
     if _state_store is None or _state_store_config != state_config:
@@ -80,7 +101,86 @@ def _stores(settings: Settings) -> tuple[OAuthStateStore, CompletionCodeStore]:
             clock=_clock,
         )
         _completion_ttl = settings.desktop_completion_ttl_seconds
-    return _state_store, _completion_store
+    refresh_config = (secret, settings.auth_refresh_ttl_seconds)
+    if _refresh_store is None or _refresh_store_config != refresh_config:
+        _refresh_store = RefreshTokenStore(
+            ttl_seconds=settings.auth_refresh_ttl_seconds,
+            clock=_clock,
+        )
+        _refresh_store_config = refresh_config
+    return _state_store, _completion_store, _refresh_store
+
+
+def _issue_refresh_pair(
+    *, user_id: int, server_origin: str, settings: Settings
+) -> tuple[str, str, int, int]:
+    """Mint a fresh (refresh_credential, access_credential, expires_in, refresh_expires_in) tuple."""
+    _, _, refresh_store = _stores(settings)
+    now = _clock()
+    jti = refresh_store.issue(user_id=user_id, server_origin=server_origin)
+    refresh_credential = issue_refresh_credential(
+        user_id,
+        jti,
+        signing_secret=settings.auth_signing_secret.get_secret_value(),
+        ttl_seconds=settings.auth_refresh_ttl_seconds,
+        now=now,
+    )
+    access_credential = issue_app_credential(
+        user_id,
+        signing_secret=settings.auth_signing_secret.get_secret_value(),
+        ttl_seconds=settings.auth_credential_ttl_seconds,
+        now=now,
+    )
+    return (
+        access_credential,
+        refresh_credential,
+        settings.auth_credential_ttl_seconds,
+        settings.auth_refresh_ttl_seconds,
+    )
+
+
+def _set_session_cookies(
+    response: Response,
+    *,
+    settings: Settings,
+    access_credential: str,
+    refresh_credential: str,
+) -> None:
+    response.set_cookie(
+        settings.auth_cookie_name,
+        access_credential,
+        max_age=settings.auth_credential_ttl_seconds,
+        httponly=True,
+        secure=settings.auth_cookie_secure,
+        samesite=settings.auth_cookie_samesite,
+        path="/",
+    )
+    response.set_cookie(
+        _refresh_cookie_name(settings),
+        refresh_credential,
+        max_age=settings.auth_refresh_ttl_seconds,
+        httponly=True,
+        secure=settings.auth_cookie_secure,
+        samesite=settings.auth_cookie_samesite,
+        path="/",
+    )
+
+
+def _clear_session_cookies(response: Response, *, settings: Settings) -> None:
+    response.delete_cookie(
+        settings.auth_cookie_name,
+        path="/",
+        secure=settings.auth_cookie_secure,
+        httponly=True,
+        samesite=settings.auth_cookie_samesite,
+    )
+    response.delete_cookie(
+        _refresh_cookie_name(settings),
+        path="/",
+        secure=settings.auth_cookie_secure,
+        httponly=True,
+        samesite=settings.auth_cookie_samesite,
+    )
 
 
 def _google_verifier(identity_token: str, audience: str) -> dict[str, object]:
@@ -136,7 +236,7 @@ def google_login(
         raise HTTPException(status_code=400, detail="Desktop login requires one loopback port")
     if (client == "desktop") != (desktop_state is not None):
         raise HTTPException(status_code=400, detail="Desktop login requires an attempt binding")
-    state_store, _ = _stores(settings)
+    state_store, _, _ = _stores(settings)
     state_value = state_store.issue(
         LoginAttempt(
             client=client, loopback_port=port, server_origin=_server_origin(settings), desktop_state=desktop_state,
@@ -170,7 +270,7 @@ def google_callback(
         raise HTTPException(status_code=400, detail="Invalid or expired login attempt")
     try:
         settings.require_auth_configuration()
-        state_store, completion_store = _stores(settings)
+        state_store, completion_store, _ = _stores(settings)
         attempt = state_store.consume(state)
         if attempt.client == "web" and not hmac.compare_digest(
             request.cookies.get(f"{settings.auth_cookie_name}_login", ""), state,
@@ -191,25 +291,19 @@ def google_callback(
         query = urlencode({"completion_code": completion, "state": attempt.desktop_state})
         return RedirectResponse(f"http://127.0.0.1:{attempt.loopback_port}/callback?{query}", status_code=302)
 
-    credential = issue_app_credential(
-        user.id,
-        signing_secret=settings.auth_signing_secret.get_secret_value(),
-        ttl_seconds=settings.auth_credential_ttl_seconds,
-        now=_clock(),
+    access_credential, refresh_credential, _, _ = _issue_refresh_pair(
+        user_id=user.id, server_origin=attempt.server_origin, settings=settings,
     )
     response = RedirectResponse(settings.auth_web_redirect_url, status_code=302)
     response.delete_cookie(
         f"{settings.auth_cookie_name}_login", path="/api/v1/auth/google/callback",
         httponly=True, secure=settings.auth_cookie_secure, samesite="lax",
     )
-    response.set_cookie(
-        settings.auth_cookie_name,
-        credential,
-        max_age=settings.auth_credential_ttl_seconds,
-        httponly=True,
-        secure=settings.auth_cookie_secure,
-        samesite=settings.auth_cookie_samesite,
-        path="/",
+    _set_session_cookies(
+        response,
+        settings=settings,
+        access_credential=access_credential,
+        refresh_credential=refresh_credential,
     )
     return response
 
@@ -219,34 +313,111 @@ def desktop_exchange(
     body: DesktopExchangeRequest,
     settings: Settings = Depends(get_settings),
 ) -> CredentialResponse:
-    """Exchange a server-bound one-use code for a bearer credential."""
+    """Exchange a server-bound one-use code for a bearer credential pair."""
     try:
         settings.require_auth_configuration()
-        _, completion_store = _stores(settings)
+        _, completion_store, _ = _stores(settings)
         user_id = completion_store.exchange(body.completion_code, server_origin=_server_origin(settings))
     except (AuthError, ValueError) as error:
         raise HTTPException(status_code=400, detail="Invalid or expired completion code") from error
-    credential = issue_app_credential(
-        user_id,
-        signing_secret=settings.auth_signing_secret.get_secret_value(),
-        ttl_seconds=settings.auth_credential_ttl_seconds,
-        now=_clock(),
+    access_credential, refresh_credential, access_ttl, refresh_ttl = _issue_refresh_pair(
+        user_id=user_id, server_origin=_server_origin(settings), settings=settings,
     )
-    return CredentialResponse(credential=credential, expires_in=settings.auth_credential_ttl_seconds)
+    return CredentialResponse(
+        credential=access_credential,
+        refresh_credential=refresh_credential,
+        expires_in=access_ttl,
+        refresh_expires_in=refresh_ttl,
+    )
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(limit_anonymous)])
 def logout(settings: Settings = Depends(get_settings)) -> Response:
-    """Clear the browser session cookie."""
+    """Clear the browser session cookies (access and refresh)."""
     response = Response(status_code=status.HTTP_204_NO_CONTENT)
-    response.delete_cookie(
-        settings.auth_cookie_name,
-        path="/",
-        secure=settings.auth_cookie_secure,
-        httponly=True,
-        samesite=settings.auth_cookie_samesite,
-    )
+    _clear_session_cookies(response, settings=settings)
     return response
+
+
+def _resolve_refresh_credential(request: Request, settings: Settings) -> str | None:
+    cookie = request.cookies.get(_refresh_cookie_name(settings))
+    if cookie:
+        return cookie
+    authorization = request.headers.get("Authorization")
+    if authorization is None:
+        return None
+    scheme, separator, value = authorization.partition(" ")
+    if separator != " " or scheme.lower() != "bearer" or not value.strip():
+        return None
+    return value.strip()
+
+
+@router.post(
+    "/refresh",
+    response_model=CredentialResponse,
+    dependencies=[Depends(limit_anonymous)],
+)
+def refresh(
+    request: Request,
+    response: Response,
+    settings: Settings = Depends(get_settings),
+) -> CredentialResponse:
+    """Exchange a valid refresh credential for a new access + refresh pair.
+
+    The submitted refresh credential is consumed atomically: a single-use jti
+    cannot be replayed. A second submission of an already-consumed jti
+    indicates a leaked credential, so the entire refresh family for that user
+    is revoked and the call returns ``401`` to force a fresh sign-in.
+    """
+    try:
+        settings.require_auth_configuration()
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error),
+        ) from error
+    refresh_value = _resolve_refresh_credential(request, settings)
+    if not refresh_value:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        claims = verify_refresh_credential(
+            refresh_value,
+            signing_secret=settings.auth_signing_secret.get_secret_value(),
+            now=_clock(),
+        )
+        _, _, refresh_store = _stores(settings)
+        user_id, server_origin = refresh_store.consume(claims.jti, server_origin=_server_origin(settings))
+    except AuthError:
+        # Either the credential is invalid/expired or the jti was already
+        # consumed. Revoke the whole family so a stolen token cannot be
+        # replayed, and tell the caller to sign in again.
+        try:
+            claims = verify_refresh_credential(
+                refresh_value,
+                signing_secret=settings.auth_signing_secret.get_secret_value(),
+                now=_clock(),
+            )
+            _, _, refresh_store = _stores(settings)
+            refresh_store.revoke_family(claims.user_id)
+        except AuthError:
+            pass
+        raise HTTPException(status_code=401, detail="Sign in again to continue") from None
+
+    access_credential, new_refresh_credential, access_ttl, refresh_ttl = _issue_refresh_pair(
+        user_id=user_id, server_origin=server_origin, settings=settings,
+    )
+
+    _set_session_cookies(
+        response,
+        settings=settings,
+        access_credential=access_credential,
+        refresh_credential=new_refresh_credential,
+    )
+    return CredentialResponse(
+        credential=access_credential,
+        refresh_credential=new_refresh_credential,
+        expires_in=access_ttl,
+        refresh_expires_in=refresh_ttl,
+    )
 
 
 @router.get("/me", response_model=UserResponse, dependencies=[Depends(limit_authenticated)])

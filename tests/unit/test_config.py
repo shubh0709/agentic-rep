@@ -83,3 +83,34 @@ def test_enabled_tracing_requires_api_key(monkeypatch, tmp_path, api_key):
 
     with pytest.raises(ValidationError, match="LANGSMITH_API_KEY is required"):
         get_settings()
+
+
+def test_auth_refresh_ttl_default_is_one_week(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    for name in ("AUTH_REFRESH_TTL_SECONDS",):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    settings = get_settings()
+
+    assert settings.auth_refresh_ttl_seconds == 604800
+
+
+@pytest.mark.parametrize("ttl", [0, -1, -604800])
+def test_auth_refresh_ttl_must_be_positive(monkeypatch, tmp_path, ttl):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("AUTH_REFRESH_TTL_SECONDS", str(ttl))
+
+    with pytest.raises(ValidationError, match="auth_refresh_ttl_seconds"):
+        get_settings()
+
+
+def test_auth_refresh_ttl_accepts_large_values(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("AUTH_REFRESH_TTL_SECONDS", "2592000")
+
+    settings = get_settings()
+
+    assert settings.auth_refresh_ttl_seconds == 2592000

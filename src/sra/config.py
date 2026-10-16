@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     google_token_endpoint: str = "https://oauth2.googleapis.com/token"
     auth_signing_secret: SecretStr = SecretStr("")
     auth_credential_ttl_seconds: int = 3600
+    auth_refresh_ttl_seconds: int = 604800
     oauth_state_ttl_seconds: int = 600
     desktop_completion_ttl_seconds: int = 60
     auth_cookie_name: str = "sra_session"
@@ -70,7 +71,12 @@ class Settings(BaseSettings):
             raise ValueError("GOOGLE_CALLBACK_URL must be an absolute HTTP(S) URL without query or fragment")
         return value
 
-    @field_validator("auth_credential_ttl_seconds", "oauth_state_ttl_seconds", "desktop_completion_ttl_seconds")
+    @field_validator(
+        "auth_credential_ttl_seconds",
+        "auth_refresh_ttl_seconds",
+        "oauth_state_ttl_seconds",
+        "desktop_completion_ttl_seconds",
+    )
     @classmethod
     def validate_positive_auth_ttl(cls, value: int) -> int:
         if value <= 0:

@@ -25,7 +25,7 @@ The macOS-only desktop notice stays exactly where it already lives — the Phase
 Once SRA-604 lands, a visitor landing on the repo can complete three flows without reading the source:
 
 - **Public demo link**: a heading near the top points readers to `https://demo.spaced-repetition-agent.example` and lists the constraints (rate limits, 7-day retention, no real study data — explore with disposable inputs).
-- **Self-host quickstart**: `git clone && cp .env.example .env && docker compose up` produces a running dashboard on `http://localhost:8000`. The section names the required env vars (`OPENAI_API_KEY`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `AUTH_SIGNING_SECRET`) and links to Google's OAuth setup instructions.
+- **Self-host quickstart**: `git clone && cp -i .env.example .env && docker compose up` produces a running dashboard on `http://localhost:8000`. The section names the required env vars (`OPENAI_API_KEY`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `AUTH_SIGNING_SECRET`) and links to Google's OAuth setup instructions.
 - **From-source quickstart**: a backup section for contributors who want to develop on the repository directly: clone, `pip install -e '.[dev]'`, `alembic upgrade head`, `uvicorn sra.api.app:create_app --factory`. Sets expectations that this path uses SQLite and one uvicorn worker only.
 - **Demo mode**: `docker compose --profile demo up` with `DEMO_MODE=true` set in `.env` activates the tighter limits and the hourly cleanup. The section explains the difference between the demo profile and the default self-host profile without duplicating the API contract from SRA-603.
 
@@ -88,7 +88,7 @@ Documentation tickets are tested through **content checks**: a small test file c
 ## What to implement
 
 1. **README top section**: insert a one-paragraph **Public demo** callout immediately under the project description. Include the URL placeholder (`https://demo.spaced-repetition-agent.example`) with a note that it points to the hosted instance, plus a sentence about the rate limits and retention. Do **not** assert the URL is live in tests; the demo URL may rotate.
-2. **Self-hosting with Docker** section: three ordered numbered code blocks — clone, `cp .env.example .env`, `docker compose up`. One prose paragraph names the required env vars (`OPENAI_API_KEY`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `AUTH_SIGNING_SECRET`) and one recovery paragraph for the typical `401` callback-mismatch failure.
+2. **Self-hosting with Docker** section: three ordered numbered code blocks — clone, `cp -i .env.example .env`, `docker compose up`. One prose paragraph names the required env vars (`OPENAI_API_KEY`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `AUTH_SIGNING_SECRET`) and one recovery paragraph for the typical `401` callback-mismatch failure.
 3. **Demo mode** subsection: two ordered numbered code blocks — set `DEMO_MODE=true` in `.env`, run `docker compose --profile demo up`. Prose: explain tighter rate limits and hourly cleanup; link to the `SRA-603` ticket for the operational details.
 4. **Google OAuth setup** subsection: link to Google's developer-console instructions, list the redirect URI the application uses (`http://127.0.0.1:8000/api/v1/auth/google/callback`), and explain why each of the three secrets is required.
 5. **Environment variables** table: extend the existing rate-limit table (or add a Phase 6 table near the bottom) with rows for `DEMO_MODE`, `DEMO_DATA_RETENTION_DAYS`, `DEMO_RESET_INTERVAL_S`, plus a one-line description and the documented default.

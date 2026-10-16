@@ -189,6 +189,7 @@ closes.
 | [SRA-303](SRA-303-desktop-oauth-authenticated-client.md) | Desktop OAuth and authenticated capture client | SRA-302 | Implemented; automated checks complete; real macOS OAuth/capture acceptance pending |
 | [SRA-304](SRA-304-api-rate-limiting.md) | Per-user and per-IP API rate limiting | SRA-302 | Implemented and verified with real loopback HTTP and substituted inference — 2026-10-14 |
 | [SRA-305](SRA-305-phase-3-integration-verification.md) | Phase 3 integration verification | SRA-303, SRA-304 | Automated verification complete; open for real Google/two-account/Keychain/physical desktop acceptance |
+| [SRA-306](SRA-306-automatic-application-credential-refresh.md) | Automatic application credential refresh (long-lived refresh token) | SRA-302, SRA-303 | Planned — the access TTL of 3,600 seconds forces a Google re-login every hour; this ticket adds a paired refresh credential so an active session never sees a forced logout |
 
 Suggested order, and what each step gives you to run:
 
@@ -201,6 +202,10 @@ Suggested order, and what each step gives you to run:
    add user/IP buckets before costly route work.
 4. **305** — migrate, sign in with two real accounts, capture through the real
    desktop client, prove isolation/RBAC/rate limits, restart, and record evidence.
+5. **306** — add a long-lived refresh token so an active browser tab or running
+   desktop client transparently renews its access token without a Google
+   re-login. Refresh tokens are rotated on every exchange; a stolen value is
+   invalidated by the next legitimate refresh.
 
 ```mermaid
 flowchart LR
@@ -210,6 +215,9 @@ flowchart LR
     302 --> 304[SRA-304 API rate limiting]
     303 --> 305[SRA-305 Integration verification]
     304 --> 305
+    302 --> 306[SRA-306 Credential auto-refresh]
+    303 --> 306
+    306 --> 305
 ```
 
 ### How the Phase 3 files work together

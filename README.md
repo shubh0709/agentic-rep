@@ -70,7 +70,7 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 pre-commit install     # runs ruff + pyright on every commit — see CONTRIBUTING.md
-cp .env.example .env   # first setup only; fill in OPENAI_API_KEY
+cp -i .env.example .env   # first setup only; fill in OPENAI_API_KEY
 alembic upgrade head   # create the DB schema (see CONTRIBUTING.md for the migration workflow)
 
 pytest -m 'not phase2' -q  # existing Phase 1 regression tests
@@ -204,7 +204,7 @@ clean clone produces a running container with one command:
 ```bash
 git clone https://github.com/your-fork/spaced-repetition-agent.git
 cd spaced-repetition-agent
-cp .env.example .env             # fill in OPENAI_API_KEY, GOOGLE_*_SECRET, AUTH_SIGNING_SECRET
+cp -i .env.example .env             # fill in OPENAI_API_KEY, GOOGLE_*_SECRET, AUTH_SIGNING_SECRET
 docker compose up                # dashboard at http://localhost:8000
 ```
 

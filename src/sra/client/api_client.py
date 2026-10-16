@@ -1,7 +1,7 @@
 """Submit study notes to the HTTP API without loading server dependencies."""
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Protocol
 
 import httpx
 from pydantic import BaseModel, TypeAdapter, ValidationError, field_validator
@@ -10,6 +10,25 @@ from sra.config import get_client_settings
 
 # The server allows two 30-second model attempts; leave room for its DB work.
 HTTP_TIMEOUT_SECONDS = 90.0
+
+
+class _RefreshCapableCredentialStore(Protocol):
+    """A subset of the desktop CredentialStore the refresh path needs.
+
+    The desktop Keychain adapter implements this; tests use a small in-memory
+    fake. The full :class:`sra.client.auth_client.CredentialStore` includes
+    ``load`` and ``delete``; this protocol only declares what the refresh
+    path actually calls, so a future narrower store can also satisfy it.
+    """
+
+    def save_pair(
+        self,
+        *,
+        server_origin: str,
+        account: str,
+        credential: str,
+        refresh_credential: str,
+    ) -> None: ...
 
 
 class _EntryResponse(BaseModel):
@@ -65,7 +84,15 @@ def _create_http_client() -> httpx.Client:
     return httpx.Client(timeout=HTTP_TIMEOUT_SECONDS, follow_redirects=False)
 
 
-def ingest_transcript(transcript: str, *, credential: str | None = None) -> list[dict[str, Any]]:
+def ingest_transcript(
+    transcript: str,
+    *,
+    credential: str | None = None,
+    refresh_credential: str | None = None,
+    credential_store: _RefreshCapableCredentialStore | None = None,
+    account: str = "default",
+    server_origin: str | None = None,
+) -> list[dict[str, Any]]:
     """SRA-201: submit text once and return validated entry dictionaries.
 
     Read get_client_settings(), strip a trailing slash from api_base_url, and
@@ -84,32 +111,24 @@ def ingest_transcript(transcript: str, *, credential: str | None = None) -> list
     details, and provide useful feedback for non-JSON error bodies. Timeouts
     after submission have an unknown outcome: explain that the server may
     already have saved the note. Never automatically retry a POST.
+
+    SRA-306: when a refresh credential and credential store are supplied and
+    the server returns 401, perform exactly one ``POST /api/v1/auth/refresh``,
+    persist the new pair via ``credential_store.save_pair``, and retry the
+    ingestion once. A second 401 (or a 401 from the refresh endpoint itself)
+    surfaces as a typed :class:`ApiClientError` and never loops.
     """
-    base_url = get_client_settings().api_base_url.rstrip("/")
+    base_url = (server_origin or get_client_settings().api_base_url).rstrip("/")
     url = f"{base_url}/api/v1/entries/ingest"
-    headers = {"Authorization": f"Bearer {credential}"} if credential is not None else None
-    try:
-        with _create_http_client() as client:
-            response = client.post(url, json={"transcript": transcript}, headers=headers)
-    except httpx.TimeoutException as exc:
-        raise ApiClientError(
-            f"Submission to {url} timed out. The server may already have saved the note; "
-            "check search before submitting again. No automatic retry was attempted."
-        ) from (None if credential is not None else exc)
-    except httpx.ConnectError as exc:
-        if credential is not None:
-            raise ApiClientError("Could not connect to the server. Please try again.") from None
-        raise ApiClientError(f"Could not connect to {url}: {exc}") from exc
-    except httpx.RequestError as exc:
-        if credential is not None:
-            raise ApiClientError(
-                "The HTTP request failed. The save outcome is uncertain; check search before submitting again. "
-                "No automatic retry was attempted."
-            ) from None
-        raise ApiClientError(
-            f"HTTP request to {url} failed: {exc}. The save outcome is uncertain; "
-            "check search before submitting again. No automatic retry was attempted."
-        ) from exc
+    response = _post_with_refresh(
+        url,
+        json_body={"transcript": transcript},
+        credential=credential,
+        refresh_credential=refresh_credential,
+        credential_store=credential_store,
+        account=account,
+        server_origin=base_url,
+    )
 
     if response.status_code != 201:
         if credential is not None:
@@ -149,6 +168,109 @@ def ingest_transcript(transcript: str, *, credential: str | None = None) -> list
             raise ApiClientError("Invalid entries in the ingestion response.", status_code=201) from None
         raise ApiClientError(f"Invalid entries in the ingestion response: {exc}", status_code=201) from exc
     return entries
+
+
+def _post_with_refresh(
+    url: str,
+    *,
+    json_body: dict[str, Any] | None,
+    credential: str | None,
+    refresh_credential: str | None,
+    credential_store: _RefreshCapableCredentialStore | None,
+    account: str,
+    server_origin: str,
+) -> httpx.Response:
+    """Issue one POST and silently retry once after a refresh on 401.
+
+    Returns the final response (the retried one, or the only one). The retry
+    is gated on both a refresh credential and a credential store so callers
+    that never opt into refresh keep the existing single-POST contract.
+    """
+    headers = {"Authorization": f"Bearer {credential}"} if credential is not None else None
+    try:
+        with _create_http_client() as client:
+            response = client.post(url, json=json_body, headers=headers)
+    except httpx.TimeoutException as exc:
+        raise ApiClientError(
+            f"Submission to {url} timed out. The server may already have saved the note; "
+            "check search before submitting again. No automatic retry was attempted."
+        ) from (None if credential is not None else exc)
+    except httpx.ConnectError as exc:
+        if credential is not None:
+            raise ApiClientError("Could not connect to the server. Please try again.") from None
+        raise ApiClientError(f"Could not connect to {url}: {exc}") from exc
+    except httpx.RequestError as exc:
+        if credential is not None:
+            raise ApiClientError(
+                "The HTTP request failed. The save outcome is uncertain; check search before submitting again. "
+                "No automatic retry was attempted."
+            ) from None
+        raise ApiClientError(
+            f"HTTP request to {url} failed: {exc}. The save outcome is uncertain; "
+            "check search before submitting again. No automatic retry was attempted."
+        ) from exc
+
+    if response.status_code != 401 or refresh_credential is None or credential_store is None:
+        return response
+
+    new_access, new_refresh = _refresh_once(
+        server_origin=server_origin,
+        refresh_credential=refresh_credential,
+    )
+    if new_access is None or new_refresh is None:
+        raise ApiClientError(
+            "Your sign-in expired. Please sign in again.",
+            status_code=401,
+        )
+    try:
+        credential_store.save_pair(
+            server_origin=server_origin,
+            account=account,
+            credential=new_access,
+            refresh_credential=new_refresh,
+        )
+    except Exception:  # noqa: BLE001 - persistence failure must not block the retry
+        pass
+
+    retried_headers = {"Authorization": f"Bearer {new_access}"}
+    try:
+        with _create_http_client() as client:
+            retried = client.post(url, json=json_body, headers=retried_headers)
+    except httpx.TimeoutException as exc:
+        raise ApiClientError(
+            f"Submission to {url} timed out after refresh. The server may already have saved the note; "
+            "check search before submitting again."
+        ) from exc
+    except httpx.RequestError as exc:
+        raise ApiClientError(
+            f"HTTP request to {url} failed after refresh: {exc}."
+        ) from exc
+    return retried
+
+
+def _refresh_once(
+    *, server_origin: str, refresh_credential: str
+) -> tuple[str | None, str | None]:
+    """Call POST /api/v1/auth/refresh once; return the new pair or (None, None)."""
+    url = f"{server_origin.rstrip('/')}/api/v1/auth/refresh"
+    try:
+        with _create_http_client() as client:
+            response = client.post(url, headers={"Authorization": f"Bearer {refresh_credential}"})
+    except httpx.RequestError:
+        return None, None
+    if response.status_code != 200:
+        return None, None
+    try:
+        body = response.json()
+    except ValueError:
+        return None, None
+    if not isinstance(body, dict):
+        return None, None
+    credential = body.get("credential")
+    refresh = body.get("refresh_credential")
+    if not isinstance(credential, str) or not isinstance(refresh, str):
+        return None, None
+    return credential, refresh
 
 
 def _extract_detail(response: httpx.Response) -> object | None:

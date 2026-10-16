@@ -145,7 +145,7 @@ Expected: the YAML and Dockerfile static-analysis tests pass; `-m 'not phase6' -
 docker build -t sra:phase6 .
 
 # 1. Default self-host path (SQLite)
-cp .env.example .env  # fill in OPENAI_API_KEY
+cp -i .env.example .env  # fill in OPENAI_API_KEY
 docker compose up  # dashboard reachable at http://localhost:8000/api/health
 curl -s -o /dev/null -w '%{http_code}\n' http://localhost:8000/api/health  # Expected: 200
 docker compose down -v
