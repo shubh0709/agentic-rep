@@ -53,7 +53,7 @@ packages = ["src/sra"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["src", "."]
 markers = [
     "phase2: voice-capture teaching contracts (intentionally red until implemented)",
     "phase3: authentication, isolation, desktop credential, and rate-limit TDD contracts",

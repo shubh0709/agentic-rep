@@ -14,6 +14,7 @@
   const SEARCH_API = "/api/v1/search";
   const DIGEST_API = "/api/v1/digest";
   const UPCOMING_API = "/api/v1/reviews/upcoming";
+  const TOPICS_API = "/api/v1/topics";
 
   const entriesStatus = document.getElementById("entries-status");
   const upcomingStatus = document.getElementById("upcoming-status");
@@ -174,6 +175,16 @@
     );
     card.appendChild(details);
 
+    const actions = el("p", { class: "entry-actions" });
+    const regenBtn = el(
+      "button",
+      { type: "button", class: "button", dataset: { action: "regenerate" } },
+      "Regenerate"
+    );
+    regenBtn.addEventListener("click", () => onRegenerate(card, entry.id, regenBtn));
+    actions.appendChild(regenBtn);
+    card.appendChild(actions);
+
     return card;
   }
 
@@ -293,7 +304,474 @@
     });
   }
 
+  // --- create-topic modal (SRA-902) ---------------------------------------
+
+  const createTopicButton = document.querySelector('[data-action="create-topic"]');
+  if (createTopicButton) {
+    initCreateTopicModal(createTopicButton);
+  }
+
   loadEntries("");
   loadDueToday();
   renderUpcoming(Number((upcomingWindow && upcomingWindow.value) || 30));
+
+  function initCreateTopicModal(trigger) {
+    let modal = null;
+    let backdrop = null;
+
+    trigger.addEventListener("click", () => {
+      if (!modal) {
+        const built = buildModal();
+        modal = built.modal;
+        backdrop = built.backdrop;
+        document.body.appendChild(backdrop);
+        bindModalHandlers(modal, backdrop, close);
+      }
+      resetModal(modal);
+      backdrop.hidden = false;
+      const firstInput = modal.querySelector("input, textarea");
+      if (firstInput) firstInput.focus();
+      document.addEventListener("keydown", escClose);
+    });
+
+    function escClose(event) {
+      if (event.key === "Escape") close();
+    }
+
+    function close() {
+      if (backdrop) backdrop.hidden = true;
+      document.removeEventListener("keydown", escClose);
+      trigger.focus();
+    }
+  }
+
+  function bindModalHandlers(modal, backdrop, close) {
+    backdrop.addEventListener("click", (event) => {
+      if (event.target === backdrop) close();
+    });
+    const cancelBtn = modal.querySelector('[data-action="cancel"]');
+    if (cancelBtn) cancelBtn.addEventListener("click", close);
+    const closeBtn = modal.querySelector('[data-action="close-modal"]');
+    if (closeBtn) closeBtn.addEventListener("click", close);
+    const addUrlBtn = modal.querySelector('[data-action="add-url"]');
+    const addPasteBtn = modal.querySelector('[data-action="add-paste"]');
+    const addFileBtn = modal.querySelector('[data-action="add-file"]');
+    const submitBtn = modal.querySelector('[data-action="submit"]');
+    const form = modal.querySelector("form");
+    if (addUrlBtn) addUrlBtn.addEventListener("click", () => addReferenceRow(modal, "url"));
+    if (addPasteBtn) addPasteBtn.addEventListener("click", () => addReferenceRow(modal, "paste"));
+    if (addFileBtn) addFileBtn.addEventListener("click", () => addReferenceRow(modal, "upload"));
+    if (form) {
+      form.addEventListener("submit", (event) => onSubmit(event, form, submitBtn, close));
+    }
+  }
+
+  function buildModal() {
+    const backdrop = el("div", {
+      class: "modal-backdrop",
+      id: "create-topic-modal",
+      role: "dialog",
+      "aria-modal": "true",
+      "aria-labelledby": "create-topic-title",
+      hidden: true,
+    });
+
+    const modal = el("div", { class: "modal" });
+    const header = el("header", { class: "modal-header" });
+    header.appendChild(el("h2", { id: "create-topic-title" }, "Create topic"));
+    const closeBtn = el("button", {
+      type: "button",
+      class: "link-button",
+      "data-action": "close-modal",
+      "aria-label": "Close",
+    }, "Close");
+    header.appendChild(closeBtn);
+    modal.appendChild(header);
+
+    const form = el("form", { class: "modal-form", novalidate: true });
+
+    const topicField = el("div", { class: "modal-field" });
+    topicField.appendChild(el("label", { for: "ct-topic" }, "Topic"));
+    topicField.appendChild(el("input", {
+      type: "text", id: "ct-topic", name: "topic", required: true,
+      maxlength: "200", placeholder: "e.g. Transformer attention heads",
+    }));
+    form.appendChild(topicField);
+
+    const subtopicField = el("div", { class: "modal-field" });
+    subtopicField.appendChild(el("label", { for: "ct-subtopic" }, "Subtopic (optional)"));
+    subtopicField.appendChild(el("input", {
+      type: "text", id: "ct-subtopic", name: "subtopic", maxlength: "200",
+    }));
+    form.appendChild(subtopicField);
+
+    const tagsField = el("div", { class: "modal-field" });
+    tagsField.appendChild(el("label", { for: "ct-tags" }, "Tags (comma-separated, optional)"));
+    tagsField.appendChild(el("input", {
+      type: "text", id: "ct-tags", name: "tags",
+      placeholder: "deep-learning, transformers",
+    }));
+    form.appendChild(tagsField);
+
+    const summaryField = el("div", { class: "modal-field" });
+    summaryField.appendChild(el("label", { for: "ct-summary" }, "Summary (optional)"));
+    summaryField.appendChild(el("textarea", {
+      id: "ct-summary", name: "summary", rows: 3, maxlength: "2000",
+    }));
+    form.appendChild(summaryField);
+
+    const refsHeader = el("div", { class: "modal-refs-header" });
+    refsHeader.appendChild(el("h3", null, "References"));
+    const addRow = el("div", { class: "modal-refs-actions" });
+    addRow.appendChild(el("button", { type: "button", class: "button", "data-action": "add-url" }, "Add URL"));
+    addRow.appendChild(el("button", { type: "button", class: "button", "data-action": "add-paste" }, "Add pasted text"));
+    addRow.appendChild(el("button", { type: "button", class: "button", "data-action": "add-file" }, "Add file"));
+    refsHeader.appendChild(addRow);
+    form.appendChild(refsHeader);
+
+    const refsList = el("div", { class: "modal-refs-list", id: "ct-refs-list" });
+    form.appendChild(refsList);
+
+    const status = el("p", {
+      class: "modal-status status",
+      id: "ct-status",
+      role: "status",
+      "aria-live": "polite",
+    });
+    form.appendChild(status);
+
+    const actions = el("div", { class: "modal-actions" });
+    actions.appendChild(el("button", { type: "button", class: "button", "data-action": "cancel" }, "Cancel"));
+    actions.appendChild(el("button", { type: "submit", class: "button primary", "data-action": "submit" }, "Generate now"));
+    form.appendChild(actions);
+
+    modal.appendChild(form);
+    backdrop.appendChild(modal);
+
+    return { modal, backdrop };
+  }
+
+  function resetModal(modal) {
+    const form = modal.querySelector("form");
+    if (form) form.reset();
+    const refsList = modal.querySelector("#ct-refs-list");
+    if (refsList) refsList.replaceChildren();
+    const status = modal.querySelector("#ct-status");
+    if (status) {
+      status.textContent = "";
+      status.className = "modal-status status";
+    }
+    const submit = modal.querySelector('[data-action="submit"]');
+    if (submit) {
+      submit.disabled = false;
+      submit.textContent = "Generate now";
+    }
+  }
+
+  function addReferenceRow(modal, kind) {
+    const refsList = modal.querySelector("#ct-refs-list");
+    if (!refsList) return;
+    const row = el("div", { class: "modal-ref-row", dataset: { kind: kind } });
+
+    const header = el("div", { class: "modal-ref-row-header" });
+    header.appendChild(el("span", { class: "modal-ref-kind" }, kindLabel(kind)));
+    const removeBtn = el("button", {
+      type: "button", class: "link-button", "data-action": "remove-ref",
+    }, "Remove");
+    header.appendChild(removeBtn);
+    row.appendChild(header);
+
+    const titleField = el("div", { class: "modal-field" });
+    titleField.appendChild(el("label", null, "Title"));
+    titleField.appendChild(el("input", { type: "text", name: "ref-title", required: true, maxlength: "200" }));
+    row.appendChild(titleField);
+
+    if (kind === "url") {
+      const urlField = el("div", { class: "modal-field" });
+      urlField.appendChild(el("label", null, "URL"));
+      urlField.appendChild(el("input", { type: "url", name: "ref-url", required: true, placeholder: "https://…" }));
+      row.appendChild(urlField);
+    } else if (kind === "paste") {
+      const pasteField = el("div", { class: "modal-field" });
+      pasteField.appendChild(el("label", null, "Pasted text"));
+      pasteField.appendChild(el("textarea", { name: "ref-pasted-text", rows: 4, required: true }));
+      row.appendChild(pasteField);
+    } else if (kind === "upload") {
+      const fileField = el("div", { class: "modal-field" });
+      fileField.appendChild(el("label", null, "File"));
+      fileField.appendChild(el("input", {
+        type: "file", name: "ref-file", required: true,
+        accept: ".pdf,.docx,.txt,.md,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/markdown",
+      }));
+      const hiddenName = el("input", { type: "hidden", name: "ref-file-name" });
+      const hiddenType = el("input", { type: "hidden", name: "ref-file-type" });
+      const hiddenB64 = el("input", { type: "hidden", name: "ref-file-b64" });
+      row.appendChild(fileField);
+      row.appendChild(hiddenName);
+      row.appendChild(hiddenType);
+      row.appendChild(hiddenB64);
+    }
+
+    refsList.appendChild(row);
+    removeBtn.addEventListener("click", () => row.remove());
+  }
+
+  function kindLabel(kind) {
+    if (kind === "url") return "URL reference";
+    if (kind === "paste") return "Pasted text reference";
+    if (kind === "upload") return "Uploaded file reference";
+    return kind;
+  }
+
+  async function onSubmit(event, form, submitBtn, close) {
+    event.preventDefault();
+    const refsList = form.querySelector("#ct-refs-list");
+    const rows = refsList ? Array.from(refsList.querySelectorAll(".modal-ref-row")) : [];
+    if (rows.length === 0) {
+      setModalStatus(form, "Add at least one reference before generating.", "error");
+      return;
+    }
+
+    const topic = form.querySelector("#ct-topic").value.trim();
+    if (!topic) {
+      setModalStatus(form, "Topic is required.", "error");
+      return;
+    }
+
+    if (submitBtn) {
+      submitBtn.disabled = true;
+      submitBtn.textContent = "Generating…";
+    }
+    setModalStatus(form, "Reading files…", "");
+
+    try {
+      const references = [];
+      for (const row of rows) {
+        const kind = row.dataset.kind;
+        const title = (row.querySelector('input[name="ref-title"]') || {}).value || "";
+        const trimmedTitle = title.trim();
+        if (!trimmedTitle) {
+          setModalStatus(form, "Every reference needs a title.", "error");
+          return;
+        }
+        if (kind === "url") {
+          const url = (row.querySelector('input[name="ref-url"]') || {}).value || "";
+          references.push({ kind: "url", title: trimmedTitle, url });
+        } else if (kind === "paste") {
+          const pasted = (row.querySelector('textarea[name="ref-pasted-text"]') || {}).value || "";
+          references.push({ kind: "paste", title: trimmedTitle, pasted_text: pasted });
+        } else if (kind === "upload") {
+          const fileInput = row.querySelector('input[name="ref-file"]');
+          const file = fileInput && fileInput.files && fileInput.files[0];
+          if (!file) {
+            setModalStatus(form, "Pick a file for every upload reference.", "error");
+            return;
+          }
+          const b64 = await readFileAsDataURL(file).then((dataUrl) => stripDataUrlPrefix(dataUrl));
+          references.push({
+            kind: "upload",
+            title: trimmedTitle,
+            file_name: file.name,
+            content_type: file.type || "application/octet-stream",
+            file_b64: b64,
+          });
+        }
+      }
+
+      const subtopic = (form.querySelector("#ct-subtopic") || {}).value || "";
+      const tagsRaw = (form.querySelector("#ct-tags") || {}).value || "";
+      const summary = (form.querySelector("#ct-summary") || {}).value || "";
+      const tags = tagsRaw.split(",").map((s) => s.trim()).filter((s) => s.length > 0);
+
+      const body = { topic, references };
+      if (subtopic.trim()) body.subtopic = subtopic.trim();
+      if (tags.length > 0) body.tags = tags;
+      if (summary.trim()) body.summary = summary.trim();
+
+      setModalStatus(form, "Generating quiz and interview…", "");
+      const res = await window.sraJsonFetch(TOPICS_API, {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+
+      if (res.status === 401) {
+        window.location.href = "/signin?next=/dashboard";
+        return;
+      }
+      if (!res.ok) {
+        let message = "Could not create topic (" + res.status + ").";
+        try {
+          const detail = await res.json();
+          if (detail && Array.isArray(detail)) {
+            const first = detail[0];
+            if (first && first.msg) message = "Could not create topic: " + first.msg;
+          } else if (detail && detail.detail) {
+            message = "Could not create topic: " +
+              (typeof detail.detail === "string" ? detail.detail : JSON.stringify(detail.detail));
+          }
+        } catch (parseError) {
+          // Fall back to the status code message.
+        }
+        setModalStatus(form, message, "error");
+        return;
+      }
+
+      const result = await res.json();
+      close();
+      prependEntryCard(result.entry, result);
+    } catch (err) {
+      setModalStatus(
+        form,
+        "Could not create topic: " + (err && err.message ? err.message : String(err)),
+        "error"
+      );
+    } finally {
+      if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.textContent = "Generate now";
+      }
+    }
+  }
+
+  function readFileAsDataURL(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.onerror = () => reject(reader.error || new Error("FileReader failed"));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function stripDataUrlPrefix(dataUrl) {
+    const commaIndex = dataUrl.indexOf(",");
+    if (commaIndex === -1) return dataUrl;
+    return dataUrl.slice(commaIndex + 1);
+  }
+
+  function setModalStatus(form, message, kind) {
+    const status = form.querySelector("#ct-status");
+    if (!status) return;
+    status.textContent = message;
+    status.className = "modal-status status" + (kind ? " " + kind : "");
+  }
+
+  function prependEntryCard(entry, fullResult) {
+    const root = document.getElementById("entries-root");
+    if (!root || !entry) return;
+    let list = root.querySelector(".entries-list");
+    if (!list) {
+      list = el("section", { class: "panel entries-list" });
+      root.replaceChildren(list);
+    }
+    const card = buildEntryCard(entry, fullResult);
+    list.insertBefore(card, list.firstChild);
+    const status = document.getElementById("entries-status");
+    if (status) {
+      const existing = (status.textContent || "").trim();
+      const count = list.querySelectorAll(".entry-card").length;
+      status.textContent = count + " " + (count === 1 ? "entry" : "entries") + ".";
+    }
+  }
+
+  function buildEntryCard(entry, result) {
+    const card = el("article", { class: "entry-card", dataset: { entryId: String(entry.id) } });
+    const header = el("header", { class: "entry-card-header" });
+    header.appendChild(el("h3", { class: "entry-topic" }, entry.topic));
+    if (entry.subtopic) {
+      header.appendChild(el("p", { class: "entry-subtopic muted" }, entry.subtopic));
+    }
+    card.appendChild(header);
+    if (Array.isArray(entry.tags) && entry.tags.length > 0) {
+      const tags = el("ul", { class: "entry-tags" });
+      for (const tag of entry.tags) tags.appendChild(el("li", { class: "entry-tag" }, tag));
+      card.appendChild(tags);
+    }
+    card.appendChild(el("p", { class: "entry-summary" }, entry.summary || ""));
+    const meta = el("p", { class: "entry-meta muted" });
+    meta.appendChild(document.createTextNode("Captured "));
+    meta.appendChild(el("time", { datetime: entry.created_at }, entry.created_at));
+    card.appendChild(meta);
+
+    const actions = el("p", { class: "entry-actions" });
+    const quizSetId = result && (result.quiz_set_id || (result.quiz_set && result.quiz_set.id));
+    const interviewPlanId = result && (result.interview_plan_id || (result.interview_plan && result.interview_plan.id));
+    if (quizSetId) {
+      actions.appendChild(el("a", { class: "button", href: "/quiz" }, "Start quiz"));
+    } else {
+      actions.appendChild(el("span", { class: "muted" }, "Quiz will appear once generation lands."));
+    }
+    if (quizSetId && interviewPlanId) {
+      actions.appendChild(el("a", {
+        class: "button",
+        href: "/dashboard/interview?quiz_set_id=" + quizSetId,
+      }, "Start interview"));
+    } else {
+      actions.appendChild(el("span", { class: "muted" }, "Interview will appear once generation lands."));
+    }
+    const regenBtn = el("button", { type: "button", class: "button", dataset: { action: "regenerate" } }, "Regenerate");
+    regenBtn.addEventListener("click", () => onRegenerate(card, entry.id, regenBtn));
+    actions.appendChild(regenBtn);
+    card.appendChild(actions);
+
+    if (Array.isArray(result && result.errors) && result.errors.length > 0) {
+      const errs = el("ul", { class: "entry-errors muted" });
+      for (const err of result.errors) errs.appendChild(el("li", null, err));
+      card.appendChild(errs);
+    }
+    return card;
+  }
+
+  async function onRegenerate(card, entryId, button) {
+    if (!card || !entryId) return;
+    button.disabled = true;
+    const previousLabel = button.textContent;
+    button.textContent = "Regenerating…";
+    try {
+      const res = await window.sraJsonFetch(TOPICS_API + "/" + entryId + "/regenerate", {
+        method: "POST",
+      });
+      if (!res.ok) {
+        card.appendChild(el(
+          "p",
+          { class: "error entry-regen-note" },
+          "Regenerate failed (" + res.status + ")."
+        ));
+        return;
+      }
+      const result = await res.json();
+      const actions = card.querySelector(".entry-actions");
+      if (actions && result) {
+        while (actions.firstChild) actions.removeChild(actions.firstChild);
+        const quizSetId = result.quiz_set_id;
+        const interviewPlanId = result.interview_plan_id;
+        if (quizSetId) {
+          actions.appendChild(el("a", { class: "button", href: "/quiz" }, "Start quiz"));
+        } else {
+          actions.appendChild(el("span", { class: "muted" }, "Quiz generation failed."));
+        }
+        if (quizSetId && interviewPlanId) {
+          actions.appendChild(el("a", {
+            class: "button",
+            href: "/dashboard/interview?quiz_set_id=" + quizSetId,
+          }, "Start interview"));
+        } else {
+          actions.appendChild(el("span", { class: "muted" }, "Interview generation failed."));
+        }
+        actions.appendChild(button);
+      }
+      if (Array.isArray(result.generation_errors) && result.generation_errors.length > 0) {
+        const note = el("p", { class: "error entry-regen-note" }, result.generation_errors.join(" "));
+        card.appendChild(note);
+      }
+    } catch (err) {
+      card.appendChild(el(
+        "p",
+        { class: "error entry-regen-note" },
+        "Regenerate failed: " + (err && err.message ? err.message : String(err))
+      ));
+    } finally {
+      button.disabled = false;
+      button.textContent = previousLabel;
+    }
+  }
 })();

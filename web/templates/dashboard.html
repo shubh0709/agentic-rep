@@ -29,7 +29,14 @@
   <section class="dashboard-section" aria-labelledby="entries-heading">
     <header class="section-header">
       <h2 id="entries-heading">Entries</h2>
-      <p class="muted">
+      <div class="section-actions">
+        <button
+          type="button"
+          class="button primary"
+          data-action="create-topic"
+          aria-haspopup="dialog"
+          aria-controls="create-topic-modal"
+        >Create topic</button>
         <label class="search-field">
           <span class="visually-hidden">Search entries</span>
           <input
@@ -40,7 +47,7 @@
             spellcheck="false"
           >
         </label>
-      </p>
+      </div>
     </header>
     <p class="lede muted" id="entries-status" role="status" aria-live="polite">Loading entries&hellip;</p>
     <div id="entries-root" data-state="loading"></div>

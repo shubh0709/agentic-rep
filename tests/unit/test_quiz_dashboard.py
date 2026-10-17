@@ -23,6 +23,7 @@ MODULE_PATH = ROOT / "dashboard" / "static" / "quiz.js"
 DRIVER = r"""
 const fs = require('node:fs');
 const responses = JSON.parse(process.env.SRA_QUIZ_RESPONSES || '[]');
+const responseCount = responses.length;
 const calls = [];
 globalThis.fetch = async (url, init) => {
   calls.push({ url: String(url), method: (init && init.method) || 'GET', body: init && init.body });
@@ -45,26 +46,23 @@ const source = fs.readFileSync(target, 'utf8');
 const moduleObj = { exports: {} };
 new Function('module', 'exports', 'fetch', source + '; if (typeof initQuiz === "function") module.exports.initQuiz = initQuiz;')(moduleObj, moduleObj.exports, globalThis.fetch);
 
-const root = { tag: 'root', attrs: {}, children: [], textContent: '' };
+const makeElement = (tag) => {
+  const el = { tag, attrs: {}, textContent: '', children: [] };
+  el.setAttribute = (k, v) => { el.attrs[k] = String(v); };
+  el.appendChild = (c) => { el.children.push(c); c.parent = el; return c; };
+  return el;
+};
+const root = makeElement('root');
 const doc = {
   root,
   createElement(tag) {
-    const el = { tag, attrs: {}, textContent: '', children: [] };
-    el.setAttribute = (k, v) => { el.attrs[k] = String(v); };
-    el.appendChild = (c) => { el.children.push(c); c.parent = el; };
-    return el;
+    return makeElement(tag);
   },
   createTextNode(text) {
     return { nodeType: 'text', textContent: String(text), children: [] };
   },
   getElementById() { return root; },
 };
-
-if (typeof moduleObj.exports.initQuiz === 'function') {
-  moduleObj.exports.initQuiz(root, doc);
-} else {
-  globalThis.initQuiz(root, doc);
-}
 
 const dump = (node) => ({
   tag: node.tag || (node.nodeType === 'text' ? '#text' : '?'),
@@ -73,7 +71,32 @@ const dump = (node) => ({
   children: (node.children || []).map(dump),
 });
 
-console.log(JSON.stringify({ calls, dom: dump(root) }));
+(async () => {
+  const controller = typeof moduleObj.exports.initQuiz === 'function'
+    ? moduleObj.exports.initQuiz(root, doc)
+    : globalThis.initQuiz(root, doc);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  if (responseCount >= 2) {
+    await controller.startQuiz(7);
+  }
+  if (responseCount >= 3) {
+    await controller.loadQuizDetail(7);
+  }
+  if (responseCount === 4) {
+    await controller.submitAnswer(99, 11, 0);
+  }
+  if (responseCount >= 6) {
+    await controller.submitAnswer(99, 11, 0);
+    await controller.submitAnswer(99, 12, 1);
+    await controller.completeAttempt(99);
+  }
+
+  console.log(JSON.stringify({ calls, dom: dump(root) }));
+})().catch((error) => {
+  console.error(error && error.stack ? error.stack : String(error));
+  process.exitCode = 1;
+});
 """
 
 
@@ -84,13 +107,16 @@ def node_available():
 
 def _run_dashboard(responses: list[dict], timeout: int = 10) -> dict:
     """Run the dashboard module with a queued response list and capture the DOM."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is required for the dashboard unit-test harness")
     env = {
         "SRA_QUIZ_MODULE": str(MODULE_PATH),
         "SRA_QUIZ_RESPONSES": json.dumps(responses),
         "PATH": "/usr/bin:/usr/local/bin",
     }
     completed = subprocess.run(
-        ["node", "-e", DRIVER],
+        [node, "-e", DRIVER],
         env=env,
         capture_output=True,
         text=True,

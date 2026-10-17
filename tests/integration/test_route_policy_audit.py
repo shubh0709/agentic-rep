@@ -36,6 +36,10 @@ def test_every_mounted_route_has_an_explicit_authentication_and_limit_policy(cli
         ("PUT", "/api/v1/me/preferences"): "user",
         ("GET", "/api/v1/reviews/upcoming"): "user",
         ("POST", "/api/v1/me/dev/pregenerate-now"): "user",
+        # SRA-901 topic-authoring routes
+        ("POST", "/api/v1/topics"): "user",
+        ("GET", "/api/v1/entries/{entry_id}/references"): "user",
+        ("POST", "/api/v1/topics/{entry_id}/regenerate"): "user",
         ("GET", "/api/v1/admin/usage"): "admin",
         ("GET", "/api/v1/admin/rate-limits"): "admin",
         ("POST", "/api/v1/admin/demo/reset"): "admin",

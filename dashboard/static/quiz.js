@@ -284,7 +284,27 @@
         return null;
       }
       return readBody(res).then(function (body) {
-        return body || null;
+        body = body || {};
+        var panel = el(doc, "section", {
+          "data-panel": "answer-result",
+          role: "status",
+          "aria-live": "polite",
+        });
+        panel.appendChild(
+          el(
+            doc,
+            "p",
+            { "data-field": "correct-option-index" },
+            "correct_option_index: " + String(body.correct_option_index)
+          )
+        );
+        if (body.explanation) {
+          panel.appendChild(
+            el(doc, "p", { "data-field": "explanation" }, body.explanation)
+          );
+        }
+        root.appendChild(panel);
+        return body;
       });
     });
   }
@@ -323,6 +343,22 @@
         body = body || {};
         state.finalScore = body.score != null ? body.score : null;
         state.finalTotal = body.total_questions != null ? body.total_questions : null;
+        clearChildren(root);
+        var panel = el(doc, "section", {
+          "data-panel": "score",
+          role: "status",
+          "aria-live": "polite",
+        });
+        panel.appendChild(el(doc, "h2", null, "Score"));
+        panel.appendChild(
+          el(
+            doc,
+            "p",
+            { "data-field": "score" },
+            String(state.finalScore) + " / " + String(state.finalTotal)
+          )
+        );
+        root.appendChild(panel);
         return body;
       });
     });

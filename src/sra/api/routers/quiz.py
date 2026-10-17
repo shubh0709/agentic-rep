@@ -208,12 +208,16 @@ def start_quiz_attempt(
     assert user.id is not None
     quiz_set = _get_owned_quiz_set(session, user.id, quiz_set_id)
     assert quiz_set.id is not None
+    questions = get_quiz_questions(quiz_set.id, session)
+    total_questions = (
+        quiz_set.question_count if body.mode == "interview" else len(questions)
+    )
     attempt = QuizAttempt.model_validate(
         QuizAttemptCreate(
             quiz_set_id=quiz_set.id,
             user_id=user.id,
             mode=body.mode,
-            total_questions=quiz_set.question_count,
+            total_questions=total_questions,
         )
     )
     session.add(attempt)
@@ -221,7 +225,6 @@ def start_quiz_attempt(
     session.refresh(attempt)
     assert attempt.id is not None
     if body.mode == "voice":
-        questions = get_quiz_questions(quiz_set.id, session)
         first_question = questions[0]
         return {
             "attempt_id": attempt.id,

@@ -5,10 +5,10 @@ from datetime import date
 import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import select
-from sra.jobs.quiz_pregeneration import pregenerate_quizzes_for_day
 
 from sra.agents.schemas import MCQDraft, MCQDrafts
-from sra.db.models import QuizAttempt, QuizSet, StudyEntry, StudyEntryCreate
+from sra.db.models import QuizAttempt, QuizSet, ReviewSchedule, StudyEntry, StudyEntryCreate
+from sra.jobs.quiz_pregeneration import pregenerate_quizzes_for_day
 
 pytestmark = pytest.mark.phase4
 
@@ -33,6 +33,16 @@ def _seed_entry(session, user_id: int, *, topic: str = "Photosynthesis") -> Stud
     session.add(entry)
     session.commit()
     session.refresh(entry)
+    assert entry.id is not None
+    session.add(
+        ReviewSchedule(
+            entry_id=entry.id,
+            interval_label="1d",
+            scheduled_date=date.today(),
+            status="pending",
+        )
+    )
+    session.commit()
     return entry
 
 

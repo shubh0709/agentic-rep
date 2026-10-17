@@ -802,6 +802,41 @@ def create_interview_plan(
     return plan
 
 
+def replace_interview_plan(
+    *,
+    quiz_set: QuizSet,
+    outline: InterviewOutline | list[dict],
+    target_questions: int,
+    session: Session,
+) -> InterviewPlan | None:
+    """Replace an existing plan's outline in place, creating it when absent."""
+    assert quiz_set.id is not None
+    if isinstance(outline, InterviewOutline):
+        payload = [item.model_dump() for item in outline.items]
+    else:
+        payload = [dict(item) for item in outline]
+    if not payload:
+        return None
+
+    plan = session.exec(
+        select(InterviewPlan).where(InterviewPlan.quiz_set_id == quiz_set.id)
+    ).first()
+    if plan is None:
+        return create_interview_plan(
+            quiz_set=quiz_set,
+            outline=payload,
+            target_questions=target_questions,
+            session=session,
+        )
+
+    plan.outline = payload
+    plan.target_questions = target_questions
+    session.add(plan)
+    session.commit()
+    session.refresh(plan)
+    return plan
+
+
 def get_or_create_interview_plan(
     quiz_set_id: int, session: Session
 ) -> tuple[QuizSet, InterviewPlan]:
