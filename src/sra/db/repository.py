@@ -26,6 +26,7 @@ from sra.db.models import (
     QuizQuestionCreate,
     QuizSet,
     QuizSetCreate,
+    ReferenceMaterial,
     ReviewSchedule,
     StudyEntry,
     StudyEntryCreate,
@@ -147,6 +148,135 @@ def create_entry(*, entry_create: StudyEntryCreate, user_id: int, session: Sessi
     schedule_reviews_for_entry(row.id, row.created_at.date(), session)
 
     return row
+
+
+def add_reference(
+    *,
+    entry_id: int,
+    kind: str,
+    title: str,
+    session: Session,
+    url: str | None = None,
+    pasted_text: str | None = None,
+    file_name: str | None = None,
+    content_type: str | None = None,
+    extracted_text: str | None = None,
+    fetch_status: str = "pending",
+    fetch_error: str | None = None,
+    fetched_at: datetime | None = None,
+) -> ReferenceMaterial:
+    """Insert one ``ReferenceMaterial`` row for ``entry_id``.
+
+    Validates the kind-discriminator at the Python layer (mirrors the
+    SQL ``ck_reference_materials_kind`` CHECK constraint) and stamps
+    ``fetch_status``/``fetch_error``/``fetched_at`` from the caller --
+    the URL fetcher and document extractor populate those values
+    before this helper runs, so a failed fetch ends up persisted as a
+    ``fetched_text=None`` row with ``fetch_status='failed'`` and a
+    short ``fetch_error`` string.
+    """
+
+    if kind not in ("url", "paste", "upload"):
+        raise ValueError(f"kind {kind!r} is not one of 'url', 'paste', 'upload'")
+    if not title or not title.strip():
+        raise ValueError("title must not be empty")
+    if kind == "url" and not url:
+        raise ValueError("url is required when kind='url'")
+    if kind == "paste" and (pasted_text is None or not pasted_text.strip()):
+        raise ValueError("pasted_text is required when kind='paste'")
+    if kind == "upload":
+        if not file_name or not file_name.strip():
+            raise ValueError("file_name is required when kind='upload'")
+        if not content_type or not content_type.strip():
+            raise ValueError("content_type is required when kind='upload'")
+
+    resolved_fetched_at = fetched_at
+    if resolved_fetched_at is None and fetch_status != "pending":
+        resolved_fetched_at = _utcnow()
+
+    row = ReferenceMaterial.model_validate(
+        {
+            "kind": kind,
+            "title": title.strip(),
+            "url": url,
+            "pasted_text": pasted_text,
+            "file_name": file_name,
+            "content_type": content_type,
+        },
+        update={
+            "entry_id": entry_id,
+            "extracted_text": extracted_text,
+            "fetch_status": fetch_status,
+            "fetch_error": fetch_error,
+            "fetched_at": resolved_fetched_at,
+        },
+    )
+
+    session.add(row)
+    try:
+        session.commit()
+    except IntegrityError as exc:
+        session.rollback()
+        raise ValueError(
+            f"reference for entry_id={entry_id} (kind={kind}) violated a constraint: {exc}"
+        ) from exc
+    session.refresh(row)
+    return row
+
+
+def list_references_for_entry(entry_id: int, *, session: Session) -> list[ReferenceMaterial]:
+    """Return this entry's ``ReferenceMaterial`` rows ordered by ``created_at`` ASC.
+
+    Stable ordering matters for the SRA-902 dashboard's reference list
+    and the SRA-903 prompt bundle, both of which iterate the rows in
+    creation order. An entry with no references returns ``[]``.
+    """
+
+    statement = (
+        select(ReferenceMaterial)
+        .where(ReferenceMaterial.entry_id == entry_id)  # pyright: ignore[reportArgumentType]
+        .order_by(ReferenceMaterial.created_at, ReferenceMaterial.id)  # pyright: ignore[reportArgumentType]
+    )
+    return list(session.exec(statement).all())
+
+
+def get_reference_text_bundle(
+    entry_id: int,
+    *,
+    session: Session,
+    max_chars_total: int = 12_000,
+    max_chars_per_ref: int = 6_000,
+) -> list[tuple[str, str]]:
+    """Build the truncated per-reference text bundle for the SRA-903 quiz prompt.
+
+    Concatenates ``extracted_text`` for ``url``/``upload`` rows and
+    ``pasted_text`` for ``paste`` rows, each capped at
+    ``max_chars_per_ref`` characters. When the running total exceeds
+    ``max_chars_total``, later references are themselves truncated and
+    tagged with the standard marker so the model knows the bounds.
+    The marker format -- ``[... truncated at N chars ...]`` -- is pinned
+    by the test so the SRA-903 prompt can rely on a stable string.
+    """
+
+    rows = list_references_for_entry(entry_id, session=session)
+    bundle: list[tuple[str, str]] = []
+    remaining_total = max_chars_total
+    for row in rows:
+        if remaining_total <= 0:
+            break
+        text = row.extracted_text if row.kind != "paste" else row.pasted_text
+        text = text or ""
+        if len(text) > max_chars_per_ref:
+            text = text[:max_chars_per_ref]
+            text = text + f"[... truncated at {max_chars_per_ref} chars ...]"
+        if len(text) > remaining_total:
+            text = text[:remaining_total]
+            text = text + f"[... truncated at {remaining_total} chars ...]"
+            remaining_total = 0
+        else:
+            remaining_total -= len(text)
+        bundle.append((row.title, text))
+    return bundle
 
 
 def get_due_reviews(user_id: int, as_of: date, session: Session) -> list[ReviewSchedule]:
@@ -864,7 +994,11 @@ def delete_user_cascade(user: User, session: Session) -> None:
             session.delete(plan)
         session.delete(quiz_set)
 
-    # study_entries and the dependent review_schedules.
+    # study_entries and the dependent review_schedules + reference_materials.
+    # The reference_materials.entry_id FK is declared with ondelete="CASCADE"
+    # so the database engine itself can clear rows on the parent death; the
+    # explicit loop is required for SQLite test runs where FK enforcement is
+    # disabled, mirroring the quiz_attempts/interview_turns treatment above.
     for entry in session.exec(
         select(StudyEntry).where(StudyEntry.user_id == user_id)
     ).all():
@@ -872,6 +1006,10 @@ def delete_user_cascade(user: User, session: Session) -> None:
             select(ReviewSchedule).where(ReviewSchedule.entry_id == entry.id)
         ).all():
             session.delete(review)
+        for ref in session.exec(
+            select(ReferenceMaterial).where(ReferenceMaterial.entry_id == entry.id)
+        ).all():
+            session.delete(ref)
         session.delete(entry)
 
     session.delete(user)

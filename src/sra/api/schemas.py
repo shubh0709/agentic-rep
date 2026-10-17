@@ -1,10 +1,12 @@
 """API request/response DTOs. Concrete, not a learning stub."""
 
+import base64
+import binascii
 from datetime import date, datetime
 from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from sra.db.models import (
     MAX_INTERVIEW_QUESTION_COUNT,
@@ -303,3 +305,235 @@ class InterviewDetailOut(BaseModel):
     turns: list[InterviewTurnOut]
     summary: InterviewSummaryOut | None
     attempt: QuizAttemptOut
+
+
+class ReferenceCreate(BaseModel):
+    """One reference attached to a new topic.
+
+    A discriminated union over ``kind``: ``url`` requires ``url``,
+    ``paste`` requires ``pasted_text``, ``upload`` requires
+    ``file_name``+``content_type``+``file_b64``. The cross-field
+    discriminator check lives in the ``@model_validator`` below.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["url", "paste", "upload"]
+    title: str
+    url: str | None = None
+    pasted_text: str | None = None
+    file_name: str | None = None
+    content_type: str | None = None
+    file_b64: str | None = None
+
+    @field_validator("title")
+    @classmethod
+    def _strip_title(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("title must not be empty after stripping")
+        if len(stripped) > 200:
+            raise ValueError("title must be 200 characters or fewer")
+        return stripped
+
+    @field_validator("url")
+    @classmethod
+    def _check_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        lowered = value.lower()
+        if not (lowered.startswith("http://") or lowered.startswith("https://")):
+            raise ValueError("url must use the http or https scheme")
+        return value
+
+    @field_validator("content_type")
+    @classmethod
+    def _check_content_type(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        allowed = {
+            "text/plain",
+            "text/markdown",
+            "application/pdf",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        }
+        if value not in allowed:
+            raise ValueError(
+                f"content_type must be one of {sorted(allowed)}; got {value!r}"
+            )
+        return value
+
+    @field_validator("pasted_text")
+    @classmethod
+    def _check_pasted_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        if not value.strip():
+            raise ValueError("pasted_text must not be empty after stripping")
+        return value
+
+    @field_validator("file_name", "file_b64")
+    @classmethod
+    def _check_non_empty_str(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        if not value.strip():
+            raise ValueError("file_name/file_b64 must not be empty when supplied")
+        return value
+
+    @model_validator(mode="after")
+    def _check_discriminator(self) -> "ReferenceCreate":
+        """Per-kind required-field contract -- mirrors the SQL CHECK constraint."""
+
+        if self.kind == "url":
+            if not self.url:
+                raise ValueError("url is required when kind='url'")
+            if self.pasted_text is not None:
+                raise ValueError("pasted_text is not allowed when kind='url'")
+            if self.file_name is not None or self.content_type is not None or self.file_b64 is not None:
+                raise ValueError("file fields are not allowed when kind='url'")
+        elif self.kind == "paste":
+            if not self.pasted_text:
+                raise ValueError("pasted_text is required when kind='paste'")
+            if self.url is not None:
+                raise ValueError("url is not allowed when kind='paste'")
+            if self.file_name is not None or self.content_type is not None or self.file_b64 is not None:
+                raise ValueError("file fields are not allowed when kind='paste'")
+        elif self.kind == "upload":
+            if not self.file_name:
+                raise ValueError("file_name is required when kind='upload'")
+            if not self.content_type:
+                raise ValueError("content_type is required when kind='upload'")
+            if not self.file_b64:
+                raise ValueError("file_b64 is required when kind='upload'")
+            if self.url is not None or self.pasted_text is not None:
+                raise ValueError("url/pasted_text are not allowed when kind='upload'")
+            # SRA-902: validate the base64 payload at the Pydantic boundary so a
+            # malformed request is a 422 client error rather than a partial-
+            # success row that surfaces as "decode_failed" in the response.
+            try:
+                base64.b64decode(self.file_b64, validate=True)
+            except (ValueError, binascii.Error) as exc:
+                raise ValueError(f"file_b64 is not valid base64: {exc}") from exc
+        return self
+
+
+class ReferenceOut(BaseModel):
+    """Response shape for a persisted reference.
+
+    ``extracted_text`` carries the (possibly truncated) text the
+    fetcher/extractor produced; for paste references the same field
+    mirrors the user-supplied ``pasted_text`` so the dashboard renders
+    a single uniform view.
+    """
+
+    id: int
+    kind: Literal["url", "paste", "upload"]
+    title: str
+    url: str | None = None
+    pasted_text: str | None = None
+    file_name: str | None = None
+    content_type: str | None = None
+    extracted_text: str | None = None
+    fetch_status: str
+    fetch_error: str | None = None
+    created_at: datetime
+
+
+class TopicCreate(BaseModel):
+    """POST /api/v1/topics request body.
+
+    ``references`` must carry at least one entry (a topic with no
+    references cannot be regenerated into a quiz -- enforced by the
+    min_length=1 validator so the violation surfaces as 422 before
+    any DB write).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    topic: str
+    subtopic: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    summary: str | None = None
+    references: list[ReferenceCreate] = Field(min_length=1, max_length=10)
+
+    @field_validator("topic")
+    @classmethod
+    def _check_topic(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("topic must not be empty after stripping")
+        if len(stripped) > 200:
+            raise ValueError("topic must be 200 characters or fewer")
+        return stripped
+
+    @field_validator("summary")
+    @classmethod
+    def _check_summary(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        if not value.strip():
+            raise ValueError("summary must not be empty after stripping")
+        if len(value) > 2_000:
+            raise ValueError("summary must be 2000 characters or fewer")
+        return value
+
+    @field_validator("subtopic")
+    @classmethod
+    def _check_subtopic(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("subtopic must not be empty when supplied")
+        if len(stripped) > 200:
+            raise ValueError("subtopic must be 200 characters or fewer")
+        return stripped
+
+    @field_validator("tags")
+    @classmethod
+    def _check_tags(cls, value: list[str]) -> list[str]:
+        if len(value) > 16:
+            raise ValueError("at most 16 tags may be supplied")
+        cleaned: list[str] = []
+        for tag in value:
+            stripped = tag.strip()
+            if not stripped:
+                raise ValueError("tag entries must not be empty after stripping")
+            if len(stripped) > 50:
+                raise ValueError("tag entries must be 50 characters or fewer")
+            cleaned.append(stripped)
+        return cleaned
+
+
+class TopicCreateResult(BaseModel):
+    """POST /api/v1/topics response body.
+
+    ``quiz_set_id`` and ``interview_plan_id`` contain the artifacts produced
+    by Generate now. They remain nullable for partial success: reference
+    ingestion is durable even if one generation pipeline fails, and ``errors``
+    explains that failure to the dashboard.
+    """
+
+    entry: EntryOut
+    references: list[ReferenceOut]
+    quiz_set_id: int | None = None
+    interview_plan_id: int | None = None
+    errors: list[str] = Field(default_factory=list)
+
+
+class TopicRegenerateResult(BaseModel):
+    """POST /api/v1/topics/{entry_id}/regenerate response body.
+
+    Carries the IDs of the freshly generated ``QuizSet`` and
+    ``InterviewPlan`` plus any per-step error messages. ``generation_errors``
+    is empty on the happy path; a non-empty list means at least one of
+    the two pipelines surfaced a typed error (the call still returns 200
+    so the dashboard can render partial-success). The fields are nullable
+    so a pipeline that errored reports ``quiz_set_id=null`` /
+    ``interview_plan_id=null`` rather than fabricating an ID.
+    """
+
+    quiz_set_id: int | None = None
+    interview_plan_id: int | None = None
+    generation_errors: list[str] = Field(default_factory=list)
