@@ -2,6 +2,7 @@
 
 import argparse
 
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session
 
@@ -23,21 +24,34 @@ def link_legacy_user(*, user_id: int, google_sub: str, session: Session) -> User
     if not google_sub.strip():
         raise LegacyIdentityError("google_sub must be non-empty")
 
-    user = session.get(User, user_id)
-    if user is None:
+    # This operator command is part of the Phase 3 migration procedure and may
+    # intentionally run while the database is still at that historical
+    # revision. Loading the current ORM model would SELECT columns introduced
+    # by later phases and fail before the identity can be linked. Restrict the
+    # query/update to the columns owned by the Phase 3 contract instead.
+    row = session.execute(
+        text(
+            "SELECT id, email, display_name, google_sub, role, last_login_at, "
+            "created_at FROM users WHERE id = :user_id"
+        ),
+        {"user_id": user_id},
+    ).mappings().one_or_none()
+    if row is None:
         raise LegacyIdentityError(f"user_id {user_id} does not exist")
-    if user.google_sub is not None:
+    if row["google_sub"] is not None:
         raise LegacyIdentityError(f"user_id {user_id} is already linked")
 
-    user.google_sub = google_sub
-    session.add(user)
     try:
+        session.execute(
+            text("UPDATE users SET google_sub = :google_sub WHERE id = :user_id"),
+            {"google_sub": google_sub, "user_id": user_id},
+        )
         session.commit()
     except IntegrityError as error:
         session.rollback()
         raise LegacyIdentityError("google_sub is already linked to another user") from error
-    session.refresh(user)
-    return user
+
+    return User.model_validate({**dict(row), "google_sub": google_sub})
 
 
 def main() -> None:
