@@ -202,6 +202,11 @@ def start_scheduler(app: FastAPI) -> None:
         replace_existing=True,
         max_instances=1,
         coalesce=True,
+        # A freshly constructed cron job otherwise waits for the next daily
+        # boundary. Queue its first run now so a process that was offline at
+        # the configured hour catches up today's due entries on startup; the
+        # cron trigger still owns every subsequent run.
+        next_run_time=datetime.now(UTC),
     )
     scheduler.add_job(
         build_wakeup_job(_session_factory),

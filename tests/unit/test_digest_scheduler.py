@@ -6,6 +6,7 @@ import logging
 from datetime import UTC, date, datetime
 
 import pytest
+from fastapi import FastAPI
 from sqlmodel import select
 
 from sra.db.models import ReviewSchedule, StudyEntry, StudyEntryCreate, User
@@ -223,3 +224,76 @@ def test_run_wakeup_tick_includes_the_next_day(session, digest_scheduler):
 
     refreshed = session.exec(select(User).where(User.id == user.id)).one()
     assert refreshed.wakeup_notification_sent_at == next_day
+
+
+def test_start_scheduler_queues_pregeneration_immediately_and_retains_daily_cron(
+    monkeypatch, digest_scheduler
+):
+    """SRA-907: startup catch-up must not replace the recurring cron contract."""
+    from sra.config import get_settings
+
+    started_at = datetime(2026, 10, 14, 17, 0, tzinfo=UTC)
+    registered: list[dict[str, object]] = []
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is None:
+                return started_at.replace(tzinfo=None)
+            return started_at.astimezone(tz)
+
+    class FakeScheduler:
+        def __init__(self, *, timezone):
+            assert timezone == "UTC"
+            self.started = False
+
+        def add_job(self, func, **kwargs):
+            registered.append({"func": func, **kwargs})
+
+        def start(self):
+            self.started = True
+
+    monkeypatch.setenv("SCHEDULER_ENABLED", "true")
+    monkeypatch.setenv("SCHEDULER_PREGEN_HOUR_UTC", "4")
+    monkeypatch.setenv("SCHEDULER_WAKEUP_INTERVAL_S", "60")
+    get_settings.cache_clear()
+    monkeypatch.setattr(digest_scheduler, "datetime", FixedDateTime)
+    monkeypatch.setattr(
+        "apscheduler.schedulers.background.BackgroundScheduler", FakeScheduler
+    )
+    app = FastAPI()
+
+    digest_scheduler.start_scheduler(app)
+
+    pregeneration = next(job for job in registered if job["id"] == "sra.pregenerate")
+    assert pregeneration["trigger"] == "cron"
+    assert pregeneration["hour"] == 4
+    assert pregeneration["minute"] == 0
+    assert pregeneration["next_run_time"] == started_at
+    assert pregeneration["max_instances"] == 1
+    assert pregeneration["coalesce"] is True
+    assert app.state.scheduler.started is True
+    get_settings.cache_clear()
+
+
+def test_start_scheduler_disabled_does_not_construct_scheduler_or_catch_up(
+    monkeypatch, digest_scheduler
+):
+    """SRA-907: disabled mode must remain wholly inert, including catch-up work."""
+    from sra.config import get_settings
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("disabled scheduler attempted to construct or queue work")
+
+    monkeypatch.setenv("SCHEDULER_ENABLED", "false")
+    get_settings.cache_clear()
+    monkeypatch.setattr(
+        "apscheduler.schedulers.background.BackgroundScheduler", unexpected
+    )
+    monkeypatch.setattr(digest_scheduler, "build_pregeneration_job", unexpected)
+    app = FastAPI()
+
+    digest_scheduler.start_scheduler(app)
+
+    assert app.state.scheduler is None
+    get_settings.cache_clear()
