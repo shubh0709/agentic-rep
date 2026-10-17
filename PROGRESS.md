@@ -326,3 +326,19 @@ none of them was attempted in this environment. The application's
 remaining failures are not silently masked with `xfail` or assertions
 expecting `NotImplementedError` — every one of them surfaces in the
 default suite and is classified in `SH-REPORT.md`.
+
+---
+
+## Phase 9 — Topic authoring with reference materials + question-quality uplift
+
+- [x] [SRA-901](tickets/SRA-901-reference-materials-and-ingestion-route.md) — reference materials schema, URL fetcher, doc extractor, ingestion route, repository helpers. Implemented on 2026-10-16: 84/84 new Phase 9 tests pass, migration round-trips on Phase 8 DB, baseline preserved at 17 pre-existing failures, ruff + pyright clean.
+- [ ] [SRA-902](tickets/SRA-902-dashboard-create-topic-ui.md) — dashboard "Create topic with references" UI + generate-now endpoint
+- [ ] [SRA-903](tickets/SRA-903-quiz-graph-quality-uplift.md) — MCQ prompt uplift (Bloom's, distractor rubric, source-grounded, verify pass)
+- [ ] [SRA-904](tickets/SRA-904-interview-quality-uplift.md) — interview planner + per-turn grader prompt uplift (source-grounded, rubric-anchored grading)
+- [ ] [SRA-905](tickets/SRA-905-phase9-integration-verification.md) — Phase 9 integration verification + README
+- [x] [SRA-906](tickets/SRA-906-dashboard-ui-recovery.md) — dashboard UI recovery and topic-generation completion. Completed 2026-10-17: startup exception, duplicate modal handlers, invalid links, generation wiring, in-place regeneration, request recovery, direct-pytest imports, and browser fixture repaired; follow-up regression repair leaves the unrestricted default suite fully green (`1232 passed, 29 skipped`) with Ruff and Pyright clean.
+- [x] [SRA-907](tickets/SRA-907-startup-quiz-pregeneration-catch-up.md) — the idempotent daily quiz pre-generation job now runs once at API scheduler startup so a process started after 04:00 UTC does not silently wait until tomorrow. Scheduler tests pass and the live catch-up persisted the previously missing quiz set.
+- [x] [SRA-908](tickets/SRA-908-transcript-grounded-quiz-verification.md) — the Phase 9 verifier now uses the same bounded `raw_transcript` visible to the draft model when captured entries have no usable reference rows. Focused tests `26 passed`, regressions `24 passed`, Ruff/Pyright clean, and the live due entry persisted nine verifier-approved questions.
+- [x] [SRA-909](tickets/SRA-909-collapse-repeated-transcription-spans.md) — exact adjacent Whisper loops of four or more tokens now collapse across segment boundaries while short/natural repetition remains intact. Unit/pipeline `35 passed`, capture E2E `7 passed`, Ruff/Pyright clean; read-only replay removed 100 repeated words from the observed 181-word transcript without modifying history.
+
+Phase 9 is *planned* (see the [Phase 9 plan](docs/plans/2026-10-16-phase9-topic-authoring-and-quality.md) and the [board](tickets/README.md#board--phase-9-topic-authoring-with-reference-materials--question-quality-uplift)). It addresses the user's two outstanding complaints — there is no way to author a topic with source material, and the generated MCQ and interview questions are mediocre — by adding a `reference_materials` table the generation agents consume as source evidence, plus a six-section rubric + Bloom taxonomy distribution + distractor-design rubric + per-question verifier pass. Out of scope: PDF/DOCX doc uploads (deferred to a Phase 9.x follow-up).

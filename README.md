@@ -26,6 +26,9 @@ The project is being built incrementally, smallest working slice first:
 - [x] **Phase 4 — Daily quiz.** MCQ generation agent, nightly pre-generation job, web quiz flow.
 - [x] **Phase 5 — Wake-up & voice quiz.** Per-user scheduled time, spoken digest read-out, voice quiz conversation agent.
 - [x] **Phase 6 — Open-source packaging.** Docker, docker-compose, demo mode, self-host docs.
+- [x] **Phase 7 — Study dashboard.** Aggregated entries, search, and upcoming-reviews timeline on `/dashboard`.
+- [x] **Phase 8 — Interactive AI interview mode.** LLM-graded, source-grounded open-ended interview alongside the MCQ quiz.
+- [ ] **Phase 9 — Topic authoring with references + question-quality uplift.** A `reference_materials` table + `POST /api/v1/topics` + a six-section rubric that materially improves MCQ and interview quality. See [the Phase 9 plan](docs/plans/2026-10-16-phase9-topic-authoring-and-quality.md) and the [tickets](tickets/README.md#board--phase-9-topic-authoring-with-reference-materials--question-quality-uplift).
 
 ## Phase 1 — what's here
 

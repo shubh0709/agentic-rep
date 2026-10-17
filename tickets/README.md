@@ -903,6 +903,133 @@ have their own evidence.
 
 ---
 
+## Board — Phase 9 (Topic authoring with reference materials + question-quality uplift)
+
+Phase 9 fixes the two quality gaps Phase 8 exposed: (1) there is no way
+to *author* a topic — the only entry path is the Phase 1 ingest route,
+which is transcript-shaped; (2) the MCQ + interview generation agents
+only see a tiny slice of metadata and are forced to invent questions,
+which the user has repeatedly called "mediocre". Phase 9 adds a
+`reference_materials` table that the generation agents consume as
+source-grounded evidence, plus a six-section rubric + Bloom
+distribution + distractor rubric + per-question verifier that
+demonstrably improves question quality. PDF/DOCX uploads are
+explicitly out of scope (deferred to a Phase 9.x follow-up); URLs and
+pasted text cover the user's stated use cases.
+
+| Ticket | Title | Blocked by | Status |
+|---|---|---|---|
+| [SRA-901](SRA-901-reference-materials-and-ingestion-route.md) | Reference materials schema, URL fetcher, doc extractor, ingestion route | SRA-509 | Implemented — 2026-10-16; 84/84 new tests pass, baseline unchanged at 17, ruff + pyright clean |
+| [SRA-902](SRA-902-dashboard-create-topic-ui.md) | Dashboard "Create topic with references" UI + generate-now endpoint | SRA-901 | Planned |
+| [SRA-903](SRA-903-quiz-graph-quality-uplift.md) | MCQ prompt uplift (Bloom's, distractor rubric, source-grounded, verify pass) | SRA-901 | Planned |
+| [SRA-904](SRA-904-interview-quality-uplift.md) | Interview planner + per-turn grader prompt uplift (source-grounded, rubric-anchored grading) | SRA-901 | Planned |
+| [SRA-905](SRA-905-phase9-integration-verification.md) | Phase 9 integration verification + README | SRA-901, SRA-902, SRA-903, SRA-904 | Planned |
+| [SRA-906](SRA-906-dashboard-ui-recovery.md) | Dashboard UI recovery and topic-generation completion | SRA-901, SRA-902, SRA-903, SRA-904 | Done — 2026-10-17; 227 Phase 9 tests and 16 Chromium flows pass |
+| [SRA-907](SRA-907-startup-quiz-pregeneration-catch-up.md) | Catch up quiz pre-generation when the API starts | SRA-403, SRA-502 | Done — 2026-10-17; live catch-up persisted a missing quiz set |
+| [SRA-908](SRA-908-transcript-grounded-quiz-verification.md) | Verify quizzes generated from captured transcripts | SRA-903, SRA-907 | Done — 2026-10-17; live entry retained 9 verified questions |
+| [SRA-909](SRA-909-collapse-repeated-transcription-spans.md) | Collapse repeated spans in local transcription | SRA-202 | Done — 2026-10-17; observed loop shrank from 181 to 81 words |
+
+Suggested order, and what each step gives you to run:
+
+1. **901** — sign in, `POST /api/v1/topics` with a topic + 1 paste + 1 URL;
+   the entry + references are persisted and the URL is fetched and
+   stored inline. No quiz yet.
+2. **902** — open `/dashboard`, click **Create topic**, fill the form, click
+   **Generate now**, see the new entry card and the quiz + interview
+   links appear in place.
+3. **903** — a quiz generated from a topic with two references carries
+   `bloom_level` + `source_passage_quote` + `distractor_misconception` on
+   every question; a planted unsupported question is dropped by the
+   verifier.
+4. **904** — the interview plan items carry `source_passage_quote` +
+   `ideal_answer_rubric`; the per-turn grader's rationale is anchored
+   to the rubric instead of LLM-improvised.
+5. **905** — re-runs the full suite + migration round-trip + route audit
+   + cascade + a manual live run; README + PROGRESS updated.
+
+```mermaid
+flowchart LR
+   509[SRA-509 Phase 5 verified] --> 901[SRA-901 Reference materials + URL fetcher + ingestion route]
+   901 --> 902[SRA-902 Create-topic UI + generate-now]
+   901 --> 903[SRA-903 MCQ prompt uplift]
+   901 --> 904[SRA-904 Interview planner + grader uplift]
+   902 --> 905[SRA-905 Phase 9 verification]
+   903 --> 905
+   904 --> 905
+```
+
+### How the Phase 9 files work together
+
+At runtime, the dashboard's **Create topic** modal (SRA-902) collects a
+topic + a list of references, hits `POST /api/v1/topics` (SRA-901), which
+persists the entry + references and returns partial-success with
+`quiz_set_id`/`interview_plan_id` already populated by the *uplifted*
+generation pipeline (SRA-903 and SRA-904). The pipeline reads
+`reference_materials` rows for the entry through
+`repository.get_reference_text_bundle` and assembles a six-section
+rubric prompt that includes the source excerpts, demands Bloom-distributed
+questions, requires every MCQ to cite a verbatim source passage, and
+(described in [`docs/plans/2026-10-16-phase9-topic-authoring-and-quality.md`](../docs/plans/2026-10-16-phase9-topic-authoring-and-quality.md))
+runs a second LLM call per MCQ to verify the correct option is actually
+supported by the cited passage. The interview planner writes the same
+`source_passage_quote` + `ideal_answer_rubric` into each outline item, and
+the per-turn grader (SRA-803 + the SRA-904 upgrade) threads those keys
+into the human message so grading is anchored to the planner's expected
+answer rather than invented on the fly.
+
+```mermaid
+flowchart LR
+   subgraph Browser[Dashboard]
+     D[dashboard.html + dashboard.js (SRA-902)]
+   end
+   subgraph Server[FastAPI process]
+     T[api/routers/topics.py (SRA-901)]
+     F[sources.fetcher (SRA-901)]
+     Q[agents.quiz_graph (SRA-903)]
+     I[agents.interview_planner (SRA-904)]
+     G[agents.interview_conversation_graph (SRA-904)]
+   end
+   subgraph DB[(reference_materials, quiz_sets, interview_plans)]
+     R[reference_materials]
+     QS[quiz_sets]
+     IP[interview_plans]
+   end
+   D -->|POST /api/v1/topics| T
+   T --> F
+   T --> R
+   T --> Q
+   T --> I
+   Q --> QS
+   I --> IP
+   G -->|reads plan item, threads source_passage_quote + rubric| I
+```
+
+| Ticket / main boundary | Input → output | Responsibility added |
+|---|---|---|
+| [901 — schema + fetcher + ingestion route](SRA-901-reference-materials-and-ingestion-route.md) | `POST /api/v1/topics` body → persisted `StudyEntry` + `reference_materials` + per-reference fetch result | Durable references with a single synchronous URL fetch; cascade-friendly; rate-limit-aware |
+| [902 — dashboard UI](SRA-902-dashboard-create-topic-ui.md) | Click → typed form → inline entry card with quiz + interview links | Vanilla-DOM modal + per-reference fetch-error UX; Regenerate hits `POST /api/v1/topics/{id}/regenerate` |
+| [903 — quiz graph uplift](SRA-903-quiz-graph-quality-uplift.md) | One entry + references → persisted `QuizSet` with `bloom_level` + `source_passage_quote` + `distractor_misconception` per `QuizQuestion` | Six-section rubric; per-question verify pass (gated on `OPENAI_VERIFY_MCQS`); additive on the read side, so legacy rows keep working |
+| [904 — interview uplift](SRA-904-interview-quality-uplift.md) | One entry + references → `InterviewPlan` outline items carrying `source_passage_quote` + `ideal_answer_rubric`, threaded into the per-turn grader | Source-grounded planning + rubric-anchored grading; backwards-compatible fallback to today's behavior when the plan lacks the new keys |
+| [905 — verification](SRA-905-phase9-integration-verification.md) | Phase 9 components + manual live run → recorded evidence | Migration round-trip, full suite, route audit, cascade, prompt smoke, live curl-completion evidence |
+
+### Required manual evidence for Phase 9
+
+| Ticket | Run against real components | Observable success | Failure/recovery check |
+|---|---|---|---|
+| SRA-901 | `alembic upgrade head` from `e5f6a7b8c9d0` then `downgrade -1` then `upgrade head` | `reference_materials` table appears with the documented CHECK constraint; pre-Phase-9 rows survive; URL references go from `fetch_status='pending'` → `fetched` or `failed` | Restore backup; rerun the migration; confirm idempotent fetch via HTTP retries |
+| SRA-902 | `curl POST /api/v1/topics` + browser modal | A new entry card appears inline with quiz + interview links; per-reference fetch errors surface inline with retry per row; cross-user isolation holds | Click **Cancel** mid-submit, confirm no rows persisted; click **Regenerate** on a card whose `QuizSet` is fresh, confirm the endpoint replaces it idempotently within a day |
+| SRA-903 | A seeded topic with two real references + real OpenAI key | Every quiz question carries `bloom_level`, `source_passage_quote`, and a non-empty `distractor_misconception`; the Bloom distribution approximates the requested split; a planted unsupported MCQ is dropped | `OPENAI_VERIFY_MCQS=false` skips the second LLM call; legacy Phase 4 quiz rows still render without the new fields |
+| SRA-904 | A seeded topic with two real references + real OpenAI key | Plan items carry `source_passage_quote` + `ideal_answer_rubric`; the per-turn rationale references the rubric | A planner-built plan from before Phase 9 (no new fields) still completes; the grader logs a warning but degrades gracefully |
+| SRA-905 | Full suite + manual end-to-end with real `OPENAI_API_KEY` | All Phase 9 tests green; legacy Phase 1–8 regressions stay green; lint + types clean; live curl trace records a new topic → quiz → interview transcripts | The Phase 4 limitation count matches the SRA-406 baseline |
+
+Each ticket's **Verification record** must contain actual outcomes
+before it closes. A passing unit test for one model validator, an
+empty grep, or a to-be-filled-in URL are not sufficient. SRA-905
+re-runs the complete topic-with-references lifecycle; earlier tickets
+must already have their own evidence.
+
+---
+
 ## Running the app
 
 ```bash
