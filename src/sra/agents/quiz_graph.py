@@ -376,7 +376,7 @@ def _pick_source_passage(
                 return excerpt
     if usable_references:
         return usable_references[0][1]
-    return ""
+    return transcript_slice
 
 
 def verify_draft(

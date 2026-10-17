@@ -114,6 +114,83 @@ class _AlwaysYesVerifyModel:
         return {"verdict": "yes", "reason": "supported"}
 
 
+class _RecordingDraftModel:
+    """Return one draft while retaining the exact prompt sent by the graph."""
+
+    def __init__(self, draft) -> None:
+        self._draft = draft
+        self.seen_messages: list = []
+
+    def with_structured_output(self, schema, **kwargs):
+        return self
+
+    def invoke(self, messages, **kwargs):
+        from sra.agents.schemas import MCQDrafts
+
+        self.seen_messages.extend(messages)
+        return MCQDrafts(drafts=[self._draft])
+
+
+class _RecordingVerifyModel:
+    """Accept drafts while retaining the source passage sent for verification."""
+
+    def __init__(self) -> None:
+        self.source_passages: list[str] = []
+
+    def with_structured_output(self, schema, **kwargs):
+        return self
+
+    def invoke(self, messages, **kwargs):
+        human = messages[-1].content
+        prefix = "Source passage:\n"
+        suffix = "\n\nQuestion:"
+        assert human.startswith(prefix)
+        self.source_passages.append(human[len(prefix) : human.index(suffix)])
+        return {"verdict": "yes", "reason": "recorded"}
+
+
+def _generate_with_recorded_evidence(
+    monkeypatch, session, seeded_user, references, *, transcript=None
+):
+    """Drive the real graph node with only its two inference seams replaced."""
+    entry = _make_entry(session, seeded_user)
+    if transcript is not None:
+        entry.raw_transcript = transcript
+        session.add(entry)
+        session.commit()
+    draft = _make_draft(
+        bloom_level="understand",
+        source_passage_quote="spaced repetition strengthens memory by scheduling retrieval practice",
+        distractor_misconception="Confusing retrieval practice with passive review",
+    )
+    draft_model = _RecordingDraftModel(draft)
+    verify_model = _RecordingVerifyModel()
+    monkeypatch.setattr(
+        "sra.agents.quiz_graph._load_references", lambda entry, session: references
+    )
+    monkeypatch.setattr(
+        "sra.agents.quiz_graph._get_draft_model", lambda: draft_model
+    )
+    monkeypatch.setattr(
+        "sra.agents.quiz_graph._get_verify_model", lambda: verify_model
+    )
+
+    quiz_graph = _import_quiz_graph()
+    result = quiz_graph.generate_questions(
+        {
+            "entry": entry,
+            "user_id": seeded_user.id,
+            "session": session,
+            "question_count": 1,
+            "option_count": 4,
+            "drafts": [],
+            "quiz_set": None,
+            "error": None,
+            "discarded_for_evidence": [],
+        }
+    )
+    assert result["error"] is None
+    return entry, draft_model, verify_model
 
 
 # ---------------------------------------------------------------------------
@@ -263,6 +340,68 @@ def test_rendered_human_message_omits_transcript_when_absent(session, seeded_use
     # But the references/metadata block must still appear.
     assert entry.topic in human.content
 
+
+# ---------------------------------------------------------------------------
+# SRA-908 verifier evidence selection
+# ---------------------------------------------------------------------------
+
+
+def test_reference_backed_entry_verifies_against_matching_reference(
+    monkeypatch, session, seeded_user
+):
+    matching_excerpt = (
+        "The notes explain that spaced repetition strengthens memory by "
+        "scheduling retrieval practice across expanding intervals."
+    )
+    _entry, _draft_model, verify_model = _generate_with_recorded_evidence(
+        monkeypatch,
+        session,
+        seeded_user,
+        [
+            ("Unrelated notes", "This passage discusses transformer attention."),
+            ("Memory notes", matching_excerpt),
+        ],
+        transcript="transcript fallback must not replace a usable reference",
+    )
+
+    assert verify_model.source_passages == [matching_excerpt]
+
+
+def test_no_usable_references_verifies_against_same_bounded_transcript_as_draft(
+    monkeypatch, session, seeded_user
+):
+    transcript = (
+        "spaced repetition strengthens memory by scheduling retrieval practice. "
+        + "x" * 1_600
+        + " verifier must never receive this suffix"
+    )
+    _entry, draft_model, verify_model = _generate_with_recorded_evidence(
+        monkeypatch,
+        session,
+        seeded_user,
+        [("Whitespace only", "   "), ("Empty", "")],
+        transcript=transcript,
+    )
+
+    expected_slice = transcript[:1_500]
+    draft_human_message = draft_model.seen_messages[-1].content
+    assert verify_model.source_passages[-1] == expected_slice
+    assert expected_slice in draft_human_message
+    assert "verifier must never receive this suffix" not in draft_human_message
+
+
+def test_blank_references_and_blank_transcript_keep_verifier_evidence_empty(
+    monkeypatch, session, seeded_user
+):
+    _entry, _draft_model, verify_model = _generate_with_recorded_evidence(
+        monkeypatch,
+        session,
+        seeded_user,
+        [("Whitespace only", "   "), ("Empty", "")],
+        transcript="",
+    )
+
+    assert verify_model.source_passages[-1] == ""
 
 
 # ---------------------------------------------------------------------------

@@ -154,6 +154,26 @@ class _VerifyModel:
         return {"verdict": verdict, "reason": f"verifier-call-{idx}"}
 
 
+class _TranscriptEvidenceVerifyModel:
+    """Accept only when the real graph passes the captured transcript."""
+
+    def __init__(self, expected_transcript: str):
+        self.expected_transcript = expected_transcript
+        self.source_passages: list[str] = []
+
+    def with_structured_output(self, schema, **kwargs):
+        return self
+
+    def invoke(self, messages, **kwargs):
+        human = messages[-1].content
+        prefix = "Source passage:\n"
+        suffix = "\n\nQuestion:"
+        assert human.startswith(prefix)
+        source_passage = human[len(prefix) : human.index(suffix)]
+        self.source_passages.append(source_passage)
+        if source_passage == self.expected_transcript:
+            return {"verdict": "yes", "reason": "transcript supports the answer"}
+        return {"verdict": "no", "reason": "transcript evidence was not supplied"}
 
 
 # ---------------------------------------------------------------------------
@@ -292,3 +312,72 @@ def test_openai_verify_mcqs_true_planted_bad_mcq_is_dropped(
     reasons = getattr(quiz_set, "discarded_for_evidence", None) or []
     assert any("draft" in str(reason).lower() or "verifier" in str(reason).lower()
                for reason in reasons)
+
+
+def test_transcript_only_entry_persists_questions_and_verifier_sees_transcript(
+    monkeypatch, session, seeded_user
+):
+    """Run the real graph + repository with only OpenAI inference substituted."""
+    from sra.agents.quiz_graph import generate_and_persist_questions
+
+    transcript = (
+        "Spaced repetition strengthens memory by scheduling retrieval practice "
+        "across expanding intervals."
+    )
+    entry = StudyEntry(
+        user_id=seeded_user.id,
+        topic="Spaced repetition",
+        subtopic="retrieval schedules",
+        tags=["learning"],
+        summary="why scheduled retrieval improves memory",
+        raw_transcript=transcript,
+    )
+    session.add(entry)
+    session.commit()
+    session.refresh(entry)
+
+    draft = _good_drafts()[0].model_copy(
+        update={
+            "question_text": "Why does spaced repetition strengthen memory?",
+            "options": [
+                "It schedules retrieval practice across expanding intervals.",
+                "It removes the need to retrieve information.",
+                "It keeps every review interval identical.",
+                "It replaces memory with passive rereading.",
+            ],
+            "source_passage_quote": (
+                "Spaced repetition strengthens memory by scheduling retrieval "
+                "practice across expanding intervals"
+            ),
+            "distractor_misconception": (
+                "Confusing active retrieval schedules with passive rereading"
+            ),
+        }
+    )
+    draft_model = _DraftModel([draft])
+    verify_model = _TranscriptEvidenceVerifyModel(transcript)
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("OPENAI_VERIFY_MCQS", "true")
+    get_settings.cache_clear()
+    monkeypatch.setattr(
+        "sra.agents.quiz_graph._get_draft_model", lambda: draft_model
+    )
+    monkeypatch.setattr(
+        "sra.agents.quiz_graph._get_verify_model", lambda: verify_model
+    )
+
+    quiz_set = generate_and_persist_questions(
+        entry=entry,
+        user_id=seeded_user.id,
+        session=session,
+        question_count=1,
+        option_count=4,
+    )
+
+    rows = session.exec(
+        select(QuizQuestion).where(QuizQuestion.quiz_set_id == quiz_set.id)
+    ).all()
+    assert rows
+    assert rows[0].question_text == draft.question_text
+    assert verify_model.source_passages == [transcript]
