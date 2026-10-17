@@ -25,8 +25,8 @@ this shape for every new table.
 
 from datetime import UTC, date, datetime
 from enum import StrEnum
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from typing import Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import field_validator, model_validator
 from sqlalchemy import Boolean, CheckConstraint, Enum, Integer, String, UniqueConstraint
@@ -290,6 +290,10 @@ class QuizSet(QuizSetBase, table=True):
     generated_on: date = Field(default_factory=_utcnow_date)
     question_count: int
     option_count: int
+    discarded_for_evidence: list[str] = Field(
+        default_factory=list,
+        sa_column=Column(JSON, nullable=False),
+    )
 
 
 class QuizQuestionBase(SQLModel):
@@ -311,6 +315,9 @@ class QuizQuestion(QuizQuestionBase, table=True):
     __tablename__ = "quiz_questions"  # pyright: ignore[reportAssignmentType]
 
     id: int | None = Field(default=None, primary_key=True)
+    bloom_level: str | None = Field(default=None, nullable=True)
+    source_passage_quote: str | None = Field(default=None, nullable=True)
+    distractor_misconception: str | None = Field(default=None, nullable=True)
 
 
 class QuizAttemptBase(SQLModel):

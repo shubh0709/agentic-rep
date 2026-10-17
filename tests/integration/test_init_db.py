@@ -32,6 +32,7 @@ from pathlib import Path
 import pytest
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, inspect, text
 from sqlmodel import Session, select
 
@@ -509,7 +510,7 @@ def test_reset_db_repairs_an_inconsistent_database(monkeypatch, tmp_path):
         ).scalar_one()
     engine.dispose()
     assert rows == [], "reset_db drops every row in every table"
-    assert version == "d4e5f6a7b8c9", (
+    assert version == ScriptDirectory.from_config(alembic_config).get_current_head(), (
         "reset_db must leave the database at the current head revision"
     )
 

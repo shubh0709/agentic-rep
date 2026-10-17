@@ -97,6 +97,9 @@ def _question_to_out(question: QuizQuestion) -> QuizQuestionOut:
         question_text=question.question_text,
         options=list(question.options),
         order_index=question.order_index,
+        bloom_level=getattr(question, "bloom_level", None),
+        source_passage_quote=getattr(question, "source_passage_quote", None),
+        distractor_misconception=getattr(question, "distractor_misconception", None),
     )
 
 
@@ -171,7 +174,7 @@ def _build_quiz_set_out(session: Session, quiz_set: QuizSet) -> QuizSetOut:
     )
 
 
-@router.get("/today", response_model=list[QuizSetOut])
+@router.get("/today", response_model=list[QuizSetOut], response_model_exclude_none=True)
 def list_today_quiz(
     user: User = Depends(require_user),
     session: Session = Depends(get_session),
@@ -183,7 +186,7 @@ def list_today_quiz(
     return [_build_quiz_set_out(session, qs) for qs in quiz_sets]
 
 
-@router.get("/{quiz_set_id}", response_model=QuizSetOut)
+@router.get("/{quiz_set_id}", response_model=QuizSetOut, response_model_exclude_none=True)
 def get_quiz_set(
     quiz_set_id: int,
     user: User = Depends(require_user),

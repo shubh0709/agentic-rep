@@ -144,8 +144,21 @@ def test_phase4_web_quiz_e2e_returns_404_for_missing_quiz(client):
     assert response.status_code == 404
 
 
-def test_phase4_web_quiz_e2e_returns_401_without_authentication(client, session, seeded_user):
+def test_phase4_web_quiz_e2e_returns_401_without_authentication(
+    monkeypatch, client, session, seeded_user
+):
     entry = _seed_entry(session, seeded_user.id)
+    _patch_generate(
+        monkeypatch,
+        [
+            MCQDraft(
+                question_text="q",
+                options=["a", "b"],
+                correct_option_index=0,
+                explanation="",
+            )
+        ],
+    )
     quiz_set = generate_and_persist_questions(
         entry=entry,
         user_id=seeded_user.id,

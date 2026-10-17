@@ -446,6 +446,7 @@ def create_quiz_set(
     question_count: int,
     option_count: int,
     drafts: list[MCQDraft],
+    discarded_for_evidence: list[str] | None = None,
 ) -> QuizSet:
     """
     Insert a QuizSet scoped to user_id along with one QuizQuestion row per
@@ -457,9 +458,15 @@ def create_quiz_set(
     schema. The `(entry_id, generated_on)` unique constraint makes the nightly
     pregeneration idempotent -- a duplicate call surfaces as a typed
     ValueError rather than a raw SQLAlchemy IntegrityError.
+
+    ``discarded_for_evidence`` is the SRA-903 verify-pass discard log
+    ("draft N: <reason>" strings). The default ``None`` resolves to an empty
+    list so the column is always populated -- legacy callers keep their
+    "all drafts accepted" semantics without having to opt in.
     """
 
     assert entry.id is not None
+    discarded = list(discarded_for_evidence) if discarded_for_evidence is not None else []
     quiz_set = QuizSet.model_validate(
         QuizSetCreate(entry_id=entry.id),
         update={
@@ -468,6 +475,7 @@ def create_quiz_set(
             "question_count": question_count,
             "option_count": option_count,
             "generated_on": generated_on,
+            "discarded_for_evidence": discarded,
         },
     )
     session.add(quiz_set)
@@ -491,7 +499,12 @@ def create_quiz_set(
                 correct_option_index=draft.correct_option_index,
                 explanation=draft.explanation,
                 order_index=order_index,
-            )
+            ),
+            update={
+                "bloom_level": getattr(draft, "bloom_level", None),
+                "source_passage_quote": getattr(draft, "source_passage_quote", None),
+                "distractor_misconception": getattr(draft, "distractor_misconception", None),
+            },
         )
         session.add(question)
 
@@ -510,6 +523,88 @@ def create_quiz_set(
             .where(QuizQuestion.quiz_set_id == quiz_set.id)
             .order_by(QuizQuestion.order_index)  # pyright: ignore[reportArgumentType]
         )
+    )
+    try:
+        quiz_set.questions = question_rows  # pyright: ignore[reportAttributeAccessIssue]
+    except Exception:
+        pass
+    return quiz_set
+
+
+def replace_quiz_set_questions(
+    *,
+    quiz_set: QuizSet,
+    session: Session,
+    question_count: int,
+    option_count: int,
+    drafts: list[MCQDraft],
+    discarded_for_evidence: list[str] | None = None,
+) -> QuizSet:
+    """Replace a generated set's questions without replacing its parent row.
+
+    Regeneration must retain the ``QuizSet`` identity because attempts refer to
+    it. Answered questions are deliberately protected: changing or deleting
+    them would rewrite the meaning of a learner's recorded answers.
+    """
+    assert quiz_set.id is not None
+
+    existing_questions = list(
+        session.exec(
+            select(QuizQuestion).where(QuizQuestion.quiz_set_id == quiz_set.id)
+        ).all()
+    )
+    existing_question_ids = [row.id for row in existing_questions if row.id is not None]
+    if existing_question_ids:
+        answered = session.exec(
+            select(QuizAnswer.id).where(
+                QuizAnswer.question_id.in_(existing_question_ids)  # type: ignore[union-attr]
+            )
+        ).first()
+        if answered is not None:
+            raise ValueError("cannot regenerate a quiz after an answer has been recorded")
+
+    for question in existing_questions:
+        session.delete(question)
+    session.flush()
+
+    quiz_set.question_count = question_count
+    quiz_set.option_count = option_count
+    quiz_set.discarded_for_evidence = list(discarded_for_evidence or [])
+    session.add(quiz_set)
+
+    for order_index, draft in enumerate(drafts):
+        question = QuizQuestion.model_validate(
+            QuizQuestionCreate(
+                quiz_set_id=quiz_set.id,
+                question_text=draft.question_text,
+                options=list(draft.options),
+                correct_option_index=draft.correct_option_index,
+                explanation=draft.explanation,
+                order_index=order_index,
+            ),
+            update={
+                "bloom_level": getattr(draft, "bloom_level", None),
+                "source_passage_quote": getattr(draft, "source_passage_quote", None),
+                "distractor_misconception": getattr(draft, "distractor_misconception", None),
+            },
+        )
+        session.add(question)
+
+    try:
+        session.commit()
+    except IntegrityError as exc:
+        session.rollback()
+        raise ValueError(
+            f"replacement questions for quiz_set_id={quiz_set.id} violated a constraint"
+        ) from exc
+
+    session.refresh(quiz_set)
+    question_rows = list(
+        session.exec(
+            select(QuizQuestion)
+            .where(QuizQuestion.quiz_set_id == quiz_set.id)
+            .order_by(QuizQuestion.order_index)  # pyright: ignore[reportArgumentType]
+        ).all()
     )
     try:
         quiz_set.questions = question_rows  # pyright: ignore[reportAttributeAccessIssue]

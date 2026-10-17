@@ -68,6 +68,13 @@ class QuizQuestionOut(BaseModel):
     question_text: str
     options: list[str]
     order_index: int
+    # SRA-903: additive quality fields surfaced only on Phase 9 rows. They
+    # default to ``None`` so the router's ``response_model_exclude_none``
+    # flag (set on the relevant endpoints) drops them from the JSON
+    # payload entirely when the underlying row has them NULL.
+    bloom_level: str | None = None
+    source_passage_quote: str | None = None
+    distractor_misconception: str | None = None
 
 
 class QuizSetOut(BaseModel):

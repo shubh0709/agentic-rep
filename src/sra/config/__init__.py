@@ -53,6 +53,14 @@ class Settings(BaseSettings):
     demo_data_retention_days: int = Field(default=7, gt=0, le=365)
     demo_reset_interval_s: int = Field(default=3600, ge=60)
     dev_mode: bool = False
+    # SRA-903: when True (default) the MCQ generation graph runs the verify
+    # pass over every surviving draft. Set OPENAI_VERIFY_MCQS=false to skip
+    # the second LLM call -- useful in offline test runs that pre-load
+    # scripted drafts or in environments where a second OpenAI hit is too
+    # expensive. ``OPENAI_API_KEY`` must still be present when this is True;
+    # the validator below rejects the empty-key combination at startup so
+    # the misconfiguration cannot reach ``generate_and_persist_questions``.
+    openai_verify_mcqs: bool = True
 
     @model_validator(mode="after")
     def validate_rate_limit_ttl(self) -> Self:
@@ -96,6 +104,14 @@ class Settings(BaseSettings):
     def validate_tracing_credentials(self) -> Self:
         if self.langsmith_tracing and not self.langsmith_api_key.get_secret_value().strip():
             raise ValueError("LANGSMITH_API_KEY is required when LANGSMITH_TRACING=true")
+        return self
+
+    @model_validator(mode="after")
+    def validate_verify_mcqs_api_key(self) -> Self:
+        if self.openai_verify_mcqs and not self.openai_api_key.get_secret_value().strip():
+            raise ValueError(
+                "OPENAI_API_KEY is required when OPENAI_VERIFY_MCQS=true"
+            )
         return self
 
     def require_auth_configuration(self) -> None:
