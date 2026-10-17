@@ -12,6 +12,7 @@ from datetime import date, datetime, timedelta
 import pytest
 from sqlmodel import select
 
+from sra.agents.schemas import StudyEntryDraft
 from sra.capture.pipeline import process_recording
 from sra.capture.transcription import TranscriptionError
 from sra.client.api_client import ApiClientError
@@ -71,6 +72,29 @@ def test_voice_capture_is_searchable_then_due_tomorrow(
     assert all(review["interval_label"] == "1d" and review["status"] == "pending" for review in due)
     assert all(review["scheduled_date"] == digest_day.isoformat() for review in due)
     assert {row.id: row.scheduled_date for row in session.exec(select(ReviewSchedule)).all()} == original_dates
+
+
+def test_repeated_whisper_span_is_submitted_and_persisted_once(
+    capture_api, whisper_boundary, audio_input, session,
+):
+    repeated_span = "retrieval practice strengthens long-term memory."
+    whisper_boundary.segments = [repeated_span, f" {repeated_span}"]
+    capture_api.drafts = [
+        StudyEntryDraft(
+            topic="Retrieval practice",
+            tags=["learning"],
+            summary="Retrieval practice strengthens memory.",
+        ),
+    ]
+
+    entries = process_recording(audio_input)
+
+    assert len(entries) == 1
+    assert len(capture_api.requests) == 1
+    assert json.loads(capture_api.requests[0].content) == {"transcript": repeated_span}
+    stored_entries = session.exec(select(StudyEntry)).all()
+    assert len(stored_entries) == 1
+    assert stored_entries[0].raw_transcript == repeated_span
 
 
 @pytest.mark.parametrize("segments", [[], ["  ", "\n\t"]])

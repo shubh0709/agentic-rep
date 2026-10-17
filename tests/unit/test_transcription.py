@@ -136,6 +136,72 @@ def test_transcribe_defaults_to_base_model(monkeypatch, audio_file):
     loader.assert_called_once_with("base")
 
 
+@pytest.mark.parametrize(
+    ("segments", "expected"),
+    [
+        (
+            [Segment("retrieval practice improves memory retrieval practice improves memory")],
+            "retrieval practice improves memory",
+        ),
+        (
+            [Segment("retrieval practice improves memory"), Segment("retrieval practice improves memory")],
+            "retrieval practice improves memory",
+        ),
+        (
+            [Segment("active recall strengthens durable memory " * 3)],
+            "active recall strengthens durable memory",
+        ),
+        (
+            [Segment("Spaced Retrieval Builds Memory. spaced retrieval BUILDS memory.")],
+            "Spaced Retrieval Builds Memory.",
+        ),
+    ],
+    ids=["within-segment", "across-segments", "three-copies", "case-insensitive"],
+)
+def test_transcribe_collapses_adjacent_repeated_spans_of_four_or_more_tokens(
+    monkeypatch, audio_file, segments, expected,
+):
+    fake_inference(monkeypatch, segments)
+
+    assert transcription.transcribe(audio_file) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("very very very very very very very very", "very very very very very very very very"),
+        ("study daily study daily study daily study daily", "study daily study daily study daily study daily"),
+        ("test the idea test the idea test the idea test the idea", "test the idea test the idea test the idea test the idea"),
+        (
+            "retrieval practice improves memory before retrieval practice improves memory",
+            "retrieval practice improves memory before retrieval practice improves memory",
+        ),
+        (
+            "retrieval practice improves memory. retrieval practice improves memory!",
+            "retrieval practice improves memory. retrieval practice improves memory!",
+        ),
+        (
+            "first explain the concept then compare both examples",
+            "first explain the concept then compare both examples",
+        ),
+    ],
+    ids=[
+        "single-word",
+        "two-token-phrase",
+        "three-token-phrase",
+        "non-adjacent",
+        "different-punctuation",
+        "unrelated-order",
+    ],
+)
+def test_transcribe_preserves_short_nonadjacent_and_nonmatching_repetition(
+    monkeypatch, audio_file, text, expected,
+):
+    fake_inference(monkeypatch, [Segment(text)])
+
+    assert transcription.transcribe(audio_file) == expected
+
+
 @pytest.mark.parametrize("segments", [[], [Segment(""), Segment(" \n\t")]])
 def test_no_speech_returns_empty_text(monkeypatch, audio_file, segments):
     model, _ = fake_inference(monkeypatch, segments)

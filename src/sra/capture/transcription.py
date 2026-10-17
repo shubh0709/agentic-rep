@@ -23,6 +23,55 @@ class WhisperModelLike(Protocol):
     def transcribe(self, audio: str, *, vad_filter: bool = False) -> tuple[Iterable[TranscriptSegment], object]: ...
 
 
+_MIN_REPEAT_SPAN_TOKENS = 4
+
+
+def _collapse_adjacent_repeated_spans(text: str) -> str:
+    """Collapse exact adjacent multi-word loops while preserving natural echoes.
+
+    Whisper can occasionally repeat a whole phrase many times. Compare
+    whitespace-delimited tokens case-insensitively (punctuation remains part of
+    each token), retain the first copy, and remove consecutive later copies.
+    The *smallest* repeating unit decides whether a run is eligible: a run of
+    ``very`` or ``study daily`` is preserved even when enough copies could be
+    mistaken for a synthetic four-token block.
+
+    Return ``text`` unchanged when no collapse occurs so existing internal
+    whitespace is preserved for ordinary transcripts.
+    """
+    tokens = text.split()
+    normalized = [token.casefold() for token in tokens]
+    kept: list[str] = []
+    collapsed = False
+    index = 0
+
+    while index < len(tokens):
+        remaining = len(tokens) - index
+        repeat_size: int | None = None
+        for size in range(1, remaining // 2 + 1):
+            if normalized[index : index + size] == normalized[
+                index + size : index + (2 * size)
+            ]:
+                repeat_size = size
+                break
+
+        if repeat_size is None or repeat_size < _MIN_REPEAT_SPAN_TOKENS:
+            kept.append(tokens[index])
+            index += 1
+            continue
+
+        block = normalized[index : index + repeat_size]
+        kept.extend(tokens[index : index + repeat_size])
+        index += repeat_size
+        copies = 1
+        while normalized[index : index + repeat_size] == block:
+            index += repeat_size
+            copies += 1
+        collapsed = collapsed or copies > 1
+
+    return " ".join(kept) if collapsed else text
+
+
 def _create_whisper_model(model_size: str) -> WhisperModelLike:
     """Construct the optional faster-whisper model when first requested.
 
@@ -94,6 +143,6 @@ def transcribe(audio_path: Path, model_size: str = "base") -> str:
             text = segment.text.strip()
             if text:
                 fragments.append(text)
-        return " ".join(fragments)
+        return _collapse_adjacent_repeated_spans(" ".join(fragments))
     except Exception as exc:
         raise TranscriptionError(f"Could not transcribe recording {audio_path}") from exc
