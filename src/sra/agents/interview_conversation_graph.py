@@ -21,6 +21,7 @@ never touches ``interview_plans`` / ``interview_turns`` rows directly.
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Literal
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -32,6 +33,17 @@ from sra.agents.quiz_graph import QuizGenerationError
 from sra.config import get_settings
 from sra.db import repository
 from sra.db.models import InterviewPlan, InterviewTurn, InterviewTurnRole, QuizAttempt
+
+logger = logging.getLogger(__name__)
+# Ensure the graph logger always has at least one handler attached when it
+# emits a warning. ``create_app()`` (and the alembic chain invoked inside
+# ``init_db()``) clears the root logger's pytest-installed handlers under
+# test conditions; an explicit ``StreamHandler`` here lets caplog-style
+# tests that depend on this logger continue to see the warning after
+# ``create_app()`` has been called upstream.
+if not logger.handlers:
+    logger.addHandler(logging.StreamHandler())
+logger.setLevel(logging.WARNING)
 
 MAX_TURNS_PER_ATTEMPT = 20
 _TRANSCRIPT_CHAR_LIMIT = 2_000
@@ -157,10 +169,14 @@ def _get_chat_model() -> ChatOpenAI:
     )
 
 
-def _build_decision_prompt(
+def _grading_prompt(
     plan_item: dict[str, Any],
     transcript_so_far: list[dict[str, Any]],
     last_user_answer: str,
+    *,
+    source_passage_quote: str | None = None,
+    ideal_answer_rubric: str | None = None,
+    bloom_level: str | None = None,
 ) -> tuple[SystemMessage, HumanMessage]:
     """Build the deterministic system + human prompt for the grading call.
 
@@ -169,6 +185,15 @@ def _build_decision_prompt(
     rubric; the human message carries the plan item, the chronological
     transcript (truncated to the last ``_TRANSCRIPT_CHAR_LIMIT``
     characters), and the most recent user answer.
+
+    SRA-904: when ``source_passage_quote``, ``ideal_answer_rubric``, and
+    ``bloom_level`` are all provided (the Phase 9 planner writes them
+    into every item), the human message gains a ``<grader_rubric>``
+    block so the LLM grader anchors scoring to the same source passage
+    the planner used. When all three are ``None`` the prompt
+    degenerates to the pre-Phase-9 shape and a ``logger.warning`` is
+    emitted so operators can spot legacy plan items that are missing
+    the rubric block.
     """
     system_text = (
         "You are an open-ended interview grader. Score the user's free-form answer "
@@ -183,17 +208,37 @@ def _build_decision_prompt(
     )
 
     transcript_text = _format_transcript(transcript_so_far)
-    human_text = (
-        f"Plan item:\n"
-        f"  subtopic: {plan_item.get('subtopic', '')}\n"
-        f"  difficulty: {plan_item.get('difficulty', '')}\n"
-        f"  focus_prompt: {plan_item.get('focus_prompt', '')}\n"
-        f"  summary: {plan_item.get('summary', '')}\n\n"
-        f"Transcript (most recent last):\n{transcript_text or '(empty)'}\n\n"
-        f"Last user answer:\n{last_user_answer}"
-    )
+    human_lines: list[str] = [
+        "Plan item:",
+        f"  subtopic: {plan_item.get('subtopic', '')}",
+        f"  difficulty: {plan_item.get('difficulty', '')}",
+        f"  focus_prompt: {plan_item.get('focus_prompt', '')}",
+        f"  summary: {plan_item.get('summary', '')}",
+    ]
 
-    return SystemMessage(content=system_text), HumanMessage(content=human_text)
+    has_rubric = bool(source_passage_quote or ideal_answer_rubric or bloom_level)
+    if not has_rubric:
+        logger.warning(
+            "interview plan item missing source_passage_quote; using fallback prompt",
+            extra={"entry_id": None, "attempt_id": None},
+        )
+    else:
+        human_lines.append("")
+        human_lines.append("<grader_rubric>")
+        if source_passage_quote:
+            human_lines.append(f"  source_passage_quote value: {source_passage_quote}")
+        if ideal_answer_rubric:
+            human_lines.append(f"  ideal_answer_rubric value: {ideal_answer_rubric}")
+        if bloom_level:
+            human_lines.append(f"  bloom_level: {bloom_level}")
+        human_lines.append("</grader_rubric>")
+
+    human_lines.append("")
+    human_lines.append(f"Transcript (most recent last):\n{transcript_text or '(empty)'}")
+    human_lines.append("")
+    human_lines.append(f"Last user answer:\n{last_user_answer}")
+
+    return SystemMessage(content=system_text), HumanMessage(content="\n".join(human_lines))
 
 
 def _format_transcript(transcript_so_far: list[dict[str, Any]]) -> str:
@@ -358,10 +403,13 @@ def _grade_answer(
         "focus_prompt": "",
         "summary": "",
     }
-    system_msg, human_msg = _build_decision_prompt(
+    system_msg, human_msg = _grading_prompt(
         plan_item,
         transcript_so_far,
         user_turn.content,
+        source_passage_quote=plan_item.get("source_passage_quote"),
+        ideal_answer_rubric=plan_item.get("ideal_answer_rubric"),
+        bloom_level=plan_item.get("bloom_level"),
     )
     try:
         decision = structured.invoke([system_msg, human_msg])

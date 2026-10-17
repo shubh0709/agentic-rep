@@ -21,7 +21,10 @@ config.set_main_option("sqlalchemy.url", get_settings().database_url)
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # Migrations run during application startup. Alembic's default would
+    # disable every already-imported application logger, which made later
+    # scheduler/interview warnings disappear depending on test/startup order.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = SQLModel.metadata
 
