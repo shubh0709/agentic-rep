@@ -215,12 +215,16 @@ def receive_loopback_completion(
                         pass
                 return
 
-    watcher = threading.Thread(target=interrupt_connection, name="sra-login-deadline", daemon=True)
-    watcher.start()
     try:
         server = _create_loopback_server()
     except OSError as error:
         raise DesktopAuthError("Could not start the local sign-in receiver.") from error
+    watcher = threading.Thread(
+        target=interrupt_connection,
+        name="sra-login-deadline",
+        daemon=True,
+    )
+    watcher.start()
     try:
         host = server.server_address[0]
         port = server.server_address[1]
