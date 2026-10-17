@@ -26,8 +26,9 @@ this shape for every new table.
 from datetime import UTC, date, datetime
 from enum import StrEnum
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from typing import Literal
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from sqlalchemy import Boolean, CheckConstraint, Enum, Integer, String, UniqueConstraint
 from sqlmodel import JSON, Column, Field, SQLModel
 
@@ -417,3 +418,184 @@ class InterviewTurn(InterviewTurnBase, table=True):
 
     id: int | None = Field(default=None, primary_key=True)
     created_at: datetime = Field(default_factory=_utcnow)
+
+class ReferenceMaterialBase(SQLModel):
+    """Common fields for every ``reference_materials`` row.
+
+    The Python-side ``kind`` literal mirrors the user-visible API values
+    (``"url"``, ``"paste"``, ``"upload"``) and the CHECK constraint in
+    ``ck_reference_materials_kind`` -- see the ticket and the Phase 9
+    design plan for the discriminator rules. ``title`` is a short
+    user-supplied label (1-200 chars after stripping). The
+    kind-specific payload fields (``url``, ``pasted_text``, ``file_name``,
+    ``content_type``) live here too so the Create schema can validate
+    them before any DB write.
+    """
+
+    kind: Literal["url", "paste", "upload"]
+    title: str
+    url: str | None = None
+    pasted_text: str | None = None
+    file_name: str | None = None
+    content_type: str | None = None
+
+    @field_validator("title")
+    @classmethod
+    def _strip_title(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("title must not be empty after stripping")
+        if len(stripped) > 200:
+            raise ValueError("title must be 200 characters or fewer")
+        return stripped
+
+
+class ReferenceMaterialCreate(ReferenceMaterialBase):
+    """What a caller may supply to create a ``ReferenceMaterial`` -- no id or created_at.
+
+    Adds ``file_b64`` (the base64-encoded upload payload -- never
+    persisted on the row, decoded and discarded by the extractor) and
+    the per-kind discriminator validator. ``model_config.extra="forbid"``
+    pins the Create shape so a typo at the call site fails fast.
+    """
+
+    file_b64: str | None = None
+
+    model_config = {"extra": "forbid"}
+
+    @field_validator("url")
+    @classmethod
+    def _check_url_scheme(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        lowered = value.lower()
+        if not (lowered.startswith("http://") or lowered.startswith("https://")):
+            raise ValueError("url must use the http or https scheme")
+        return value
+
+    @field_validator("pasted_text")
+    @classmethod
+    def _check_pasted_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        if not value.strip():
+            raise ValueError("pasted_text must not be empty after stripping")
+        return value
+
+    @field_validator("content_type")
+    @classmethod
+    def _check_content_type(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        allowed = {
+            "text/plain",
+            "text/markdown",
+            "application/pdf",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        }
+        if value not in allowed:
+            raise ValueError(
+                f"content_type must be one of {sorted(allowed)}; got {value!r}"
+            )
+        return value
+
+    @field_validator("file_name")
+    @classmethod
+    def _check_file_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        if not value.strip():
+            raise ValueError("file_name must not be empty after stripping")
+        return value
+
+    @field_validator("file_b64")
+    @classmethod
+    def _check_file_b64(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        if not value.strip():
+            raise ValueError("file_b64 must not be empty after stripping")
+        return value
+
+    @field_validator("kind", mode="before")
+    @classmethod
+    def _check_kind_literal(cls, value: object) -> object:
+        if value not in ("url", "paste", "upload"):
+            raise ValueError("kind must be one of 'url', 'paste', 'upload'")
+        return value
+
+    @model_validator(mode="after")
+    def _check_discriminator(self) -> "ReferenceMaterialCreate":
+        """Enforce the per-kind required-field contract at the Python layer.
+
+        Mirrors the SQL ``ck_reference_materials_kind`` constraint so a
+        violation surfaces as a typed ``ValidationError`` before any DB
+        write -- the route can return 422 without round-tripping a
+        CHECK failure.
+        """
+
+        kind = self.kind
+        if kind == "url":
+            if not self.url:
+                raise ValueError("url is required when kind='url'")
+            if self.pasted_text is not None:
+                raise ValueError("pasted_text is not allowed when kind='url'")
+            if self.file_name is not None or self.content_type is not None or self.file_b64 is not None:
+                raise ValueError("file fields are not allowed when kind='url'")
+        elif kind == "paste":
+            if not self.pasted_text:
+                raise ValueError("pasted_text is required when kind='paste'")
+            if self.url is not None:
+                raise ValueError("url is not allowed when kind='paste'")
+            if self.file_name is not None or self.content_type is not None or self.file_b64 is not None:
+                raise ValueError("file fields are not allowed when kind='paste'")
+        elif kind == "upload":
+            if not self.file_name:
+                raise ValueError("file_name is required when kind='upload'")
+            if not self.content_type:
+                raise ValueError("content_type is required when kind='upload'")
+            if not self.file_b64:
+                raise ValueError("file_b64 is required when kind='upload'")
+            if self.url is not None or self.pasted_text is not None:
+                raise ValueError("url/pasted_text are not allowed when kind='upload'")
+        return self
+
+
+class ReferenceMaterial(ReferenceMaterialBase, table=True):
+    """Phase 9 reference material attached to a ``StudyEntry``.
+
+    The 3-way CHECK constraint enforces the discriminator at the SQL
+    layer regardless of how the row was inserted (Pydantic-validated
+    path, raw SQL, or a future caller). The ``entry_id`` FK is declared
+    with ``ondelete="CASCADE"`` so the database engine itself can clear
+    rows on the parent's death; ``delete_user_cascade`` mirrors this
+    in Python for SQLite test runs where FK enforcement is disabled.
+    """
+
+    __tablename__ = "reference_materials"  # pyright: ignore[reportAssignmentType]
+    __table_args__ = (
+        CheckConstraint(
+            "(kind = 'url' AND url IS NOT NULL AND pasted_text IS NULL AND file_name IS NULL) "
+            "OR (kind = 'paste' AND pasted_text IS NOT NULL AND url IS NULL AND file_name IS NULL) "
+            "OR (kind = 'upload' AND file_name IS NOT NULL AND content_type IS NOT NULL "
+            "    AND url IS NULL AND pasted_text IS NULL)",
+            name="ck_reference_materials_kind",
+        ),
+    )
+
+    entry_id: int = Field(foreign_key="study_entries.id", index=True)
+    extracted_text: str | None = None
+    fetch_status: str = Field(
+        default="pending",
+        sa_column=Column(String, nullable=False, server_default="pending"),
+    )
+    fetch_error: str | None = None
+    fetched_at: datetime | None = None
+    created_at: datetime = Field(default_factory=_utcnow)
+    id: int | None = Field(default=None, primary_key=True)
+    # Override the inherited ``kind`` with an explicit SQLAlchemy column so
+    # SQLModel doesn't try to map a ``Literal[...]`` Python type to a
+    # SQLAlchemy type. Mirrors the ``User.role`` idiom above.
+    kind: Literal["url", "paste", "upload"] = Field(
+        sa_column=Column(String, nullable=False),
+    )
