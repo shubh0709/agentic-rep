@@ -41,6 +41,11 @@ Use this message shape:
 type(optional-scope): concrete action (SRA-NNN)
 ```
 
+Keep the **subject line to 50 characters or fewer**. Tooling such as GitHub
+and GitHub Desktop warn at 70–72 characters, so any subject at that length
+should be shortened. **Wrap commit body text at 72 characters per line.**
+These limits do not rewrite history, but every new commit must follow them.
+
 Use `chore` for setup/tooling, `build` for dependencies, `feat` for behavior,
 `fix` for corrections, `test` for test-focused changes, and `docs` for
 documentation. Omit the ticket suffix when there is no applicable ticket.
@@ -69,23 +74,23 @@ structure to the current work rather than copying its count or old ticket scope.
 |---|---|---|
 | 1 | `chore: initialize project setup` | Packaging, base dependencies, package structure, ignores, license, introductory README. |
 | 2 | `chore(dev): add development tooling and CI` | Ruff, Pyright, pre-commit, CI, editor settings, contribution guidance and GitHub templates. |
-| 3 | `build(ai): add LangChain, LangGraph, and OpenAI foundations` | AI dependencies, structured schemas, model factories and interfaces. |
-| 4 | `feat(observability): add optional LangSmith tracing foundation` | Tracing dependency, settings, helper, environment examples and setup docs. |
-| 5 | `test: establish Phase 1 TDD scaffold and acceptance tests` | Fixtures, mocked models, supporting models and stubs, baseline tests and ticket backlog. |
-| 6 | `feat(config): implement cached application settings (SRA-101)` | Cached environment settings and validation. |
-| 7 | `feat(scheduler): implement spaced repetition scheduling (SRA-102)` | Calendar-aware intervals and review persistence. |
-| 8 | `feat(db): implement user-scoped repository and migrations (SRA-103)` | Entry storage, search, review operations, ownership checks and migrations. |
-| 9 | `feat(api): implement app factory, digest, and search (SRA-104)` | API wiring, local-user dependency and digest/search routes. |
-| 10 | `feat(ingestion): implement transcript ingestion agent and route (SRA-105)` | Extraction, validation, persistence, error handling, route integration and tests. |
-| 11 | `feat(query): implement study query agent and chat route (SRA-106)` | Study tools, agent loop, chat integration and tests. |
-| 12 | `test(integration): verify Phase 1 core loop (SRA-107)` | End-to-end and tracing verification, due-date assertions and phase completion docs. |
+| 3 | `build(ai): add LangChain and OpenAI stack` | AI dependencies, structured schemas, model factories and interfaces. |
+| 4 | `feat(observability): add LangSmith tracing` | Tracing dependency, settings, helper, environment examples and setup docs. |
+| 5 | `test: add Phase 1 TDD scaffold and tests` | Fixtures, mocked models, supporting models and stubs, baseline tests and ticket backlog. |
+| 6 | `feat(config): implement cached settings (SRA-101)` | Cached environment settings and validation. |
+| 7 | `feat(scheduler): implement SR scheduling (SRA-102)` | Calendar-aware intervals and review persistence. |
+| 8 | `feat(db): add user repo and migrations (SRA-103)` | Entry storage, search, review operations, ownership checks and migrations. |
+| 9 | `feat(api): add digest and search routes (SRA-104)` | API wiring, local-user dependency and digest/search routes. |
+| 10 | `feat(ingestion): add transcript agent (SRA-105)` | Extraction, validation, persistence, error handling, route integration and tests. |
+| 11 | `feat(query): implement study chat agent (SRA-106)` | Study tools, agent loop, chat integration and tests. |
+| 12 | `test(integration): verify Phase 1 loop (SRA-107)` | End-to-end and tracing verification, due-date assertions and phase completion docs. |
 
 A smaller batch could be proposed like this:
 
 | # | Message | Breakdown |
 |---|---|---|
 | 1 | `build(capture): add local transcription dependency` | Dependency declaration and corresponding lockfile changes. |
-| 2 | `feat(capture): implement local Whisper transcription (SRA-202)` | Transcription implementation, focused tests and ticket documentation. |
+| 2 | `feat(capture): add Whisper transcription (SRA-202)` | Transcription implementation, focused tests and ticket documentation. |
 
 These are planning examples, not claims that the listed work is currently pending.
 
