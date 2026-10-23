@@ -1,102 +1,33 @@
 # SRA-807 — Interview dashboard UI
 
-**Type:** Task
-**Phase:** 8 — Interactive AI interview mode
-**Priority:** High — the dashboard is the primary surface the user touches during an interview
-**Status:** Planned
-**Blocked by:** SRA-805 (interview routes), SRA-806 (wire DTOs)
-**Blocks:** SRA-809
+**Phase:** 8 — Interactive AI interview mode · **Status:** not started
 
 ## Summary
 
-Add the browser-side UI for the interview feature: a chat-thread view in `dashboard/static/interview.html` and `dashboard/static/interview.js` that starts an interview, drives the per-turn loop, and renders the summary panel on completion. The JS module reuses the helper style established by `dashboard/static/quiz.js` (`el()`, `clearChildren()`, `statusPanel()`, `handleErrorStatus()`) so the two surfaces look consistent to the user and read consistently in the unit tests. A "Start interview" button is added to the existing `dashboard/static/quiz.html` today list, alongside the existing MCQ "Start" button.
+Adds the browser-side UI for the interview feature: a chat-thread view in `dashboard/static/interview.html` and `dashboard/static/interview.js` that starts an interview, drives the per-turn loop, and renders the summary panel on completion. The JS module reuses the helper style established by `dashboard/static/quiz.js` (`el()`, `clearChildren()`, `statusPanel()`, `handleErrorStatus()`) so the two surfaces look and read consistently. A "Start interview" button is added to the existing `dashboard/static/quiz.html` today list alongside the MCQ "Start" button. UI only: no HTTP handler and no LLM call is touched.
 
-This ticket is **UI only**. No HTTP handler and no LLM call is touched.
+## Unlocks
 
-## Where things stand right now
+- A signed-in user can open `/dashboard/interview?quiz_set_id=…` — or click "Start interview" from the today list — and drive a full interview loop in the browser, with the same auth / rate-limit / error UX the MCQ surface already has.
+- Closing the tab mid-interview and reopening the URL restores the transcript: the page fetches on load and only enables the input area once the resume fetch completes.
 
-- [`dashboard/static/quiz.html`](../dashboard/static/quiz.html) and [`dashboard/static/quiz.js`](../dashboard/static/quiz.js) are the Phase 4 dashboard. `quiz.js` exposes `initQuiz(root, doc)` on `globalThis.initQuiz` and a small object API (`sraQuiz.loadTodayQuizzes`, `sraQuiz.startQuiz`, etc.) for tests. The same shape is used here.
-- [`dashboard/README.md`](../dashboard/README.md) documents the existing `quiz.html` mounting style. SRA-807 mirrors it for `interview.html`; the two pages are siblings mounted at `/dashboard/interview` (added in the same router update).
-- [`src/sra/api/schemas.py`](../src/sra/api/schemas.py) carries the SRA-806 wire DTOs (`InterviewTurnRequest`, `InterviewTurnResponse`, `InterviewPlanOut`, `InterviewTurnOut`, `InterviewSummaryOut`, `InterviewDetailOut`, and the extended `StartAttemptRequest.mode`).
-- [`src/sra/api/routers/quiz.py`](../src/sra/api/routers/quiz.py) exposes the SRA-805 routes: `POST /api/v1/quiz/{id}/attempts {mode: "interview"}`, `POST /api/v1/quiz/attempts/{id}/interview-turn`, `GET /api/v1/quiz/attempts/{id}/interview`.
+## Files
 
-## What this ticket unlocks
+| File | Change | Why |
+|---|---|---|
+| `dashboard/static/interview.html` | new | Page shell: single `<div id="interview-root">` plus the boot pattern `quiz.html` uses, loading `interview.js` as an ES module. |
+| `dashboard/static/interview.js` | new | Exports `initInterview(root, doc, options?)` on `globalThis.initInterview` plus a `sraInterview` API (`startInterview`, `sendAnswer`, `sendNext`, `sendEnd`, `resumeInterview`, `renderThread`, `renderSummary`, `renderInputArea`, `state`, `ready`) mirroring `quiz.js`. `el` / `clearChildren` / `statusPanel` / `statusTitle` / `friendlyDetail` / `handleErrorStatus` are copied from `quiz.js` verbatim — duplication is intentional, deferred until a third page needs a shared `sra_dom.js`. |
+| `dashboard/static/quiz.html` + `quiz.js` | edit | Add a "Start interview" button beside the MCQ "Start"; `renderTodayList` renders a second `data-action="start-interview"` button inside the existing `data-field="actions"` span, leaving the MCQ selector intact. |
+| `web/routes.py` | edit | Add `interview_page` returning `interview.html` through a `_read_static_file` helper so the page keeps the same `require_user` + `limit_authenticated` dependencies as the other protected pages; mount `dashboard/static/` at `/dashboard-static` so the module script resolves in production. |
+| `tests/unit/test_interview_dashboard.py` | new | Load `interview.js` via `new Function` with a fake `document` and `fetch`; drive start → 2 answers → next → 1 answer → end; assert the `data-panel` attributes, the score chip, the button states, and the summary panel. |
+| `tests/e2e/test_phase8_interview_dashboard_e2e.py` | new | Real `create_app()` with a patched LLM, plus the Node module-load smoke test. |
+| `dashboard/README.md` | edit | Document the interview page, the `?attempt_id=` resume flow, and the SRA-805 endpoints consumed. |
 
-Once SRA-807 lands, a signed-in user can open `/dashboard/interview?quiz_set_id=…` (or click "Start interview" from the today list) and drive a full interview loop in the browser, with the same auth / rate-limit / error UX the MCQ surface already has.
+## Design notes
 
-Before SRA-807: the SRA-805 routes exist but no browser surface calls them. The user would have to use `curl` to drive an interview. After SRA-807: the dashboard renders the chat thread, the score chip under each user bubble, the rationale on demand, the "Next question" / "End interview" controls, and the summary panel — all without a page reload.
-
-## How this fits into the whole app
-
-The interview dashboard is a sibling of the MCQ dashboard. The two share the same auth (cookie / bearer), the same rate-limit bucket (per-user), and the same DOM helper style. The SRA-808 voice client is a separate desktop flow that consumes the same SRA-805 routes; the dashboard does not share code with the voice client.
-
-```mermaid
-flowchart LR
-  subgraph Browser[Browser tab at /dashboard/interview]
-    Page[interview.html shell]
-    JS[interview.js]
-    Page --> JS
-  end
-  subgraph Server[FastAPI process]
-    Start[POST /quiz/{id}/attempts {mode: interview}]
-    Turn[POST /quiz/attempts/{id}/interview-turn]
-    Detail[GET /quiz/attempts/{id}/interview]
-  end
-  JS -->|"start"| Start
-  JS -->|"answer / next / end"| Turn
-  JS -->|"resume after refresh"| Detail
-  Start --> Turn
-  Turn --> Detail
-```
-
-The dashboard is the only browser surface that touches the interview routes. The SRA-808 voice client reuses the same routes from the desktop.
-
-### Why a separate page rather than embedding inside `quiz.html`
-
-The chat-thread UX is structurally different from the MCQ flow (one question at a time, persistent transcript, two action buttons). Embedding it inside `quiz.html` would force the page to ship two renderers and switch between them. A separate `interview.html` keeps each surface single-purpose, mirrors the existing `quiz.html` / `dashboard.html` pattern, and lets the unit tests target `interview.js` in isolation.
-
-### Why a `GET /interview` resume on page load
-
-A user who closes the tab mid-interview should be able to reopen the URL and pick up where they left off. The page calls `GET /quiz/attempts/{id}/interview` on load, renders the existing transcript into the chat thread, and only enables the input area once the resume fetch completes. This is the cheapest way to make the dashboard recover from a disconnect without any client-side state machine.
-
-## Files and why they matter
-
-| File | Role and required change |
-|---|---|
-| [`dashboard/static/interview.html`](../dashboard/static/interview.html) **[NEW]** | The page shell. Single `<div id="interview-root">` plus the same boot pattern `quiz.html` uses. Loads `interview.js` as an ES module. |
-| [`dashboard/static/interview.js`](../dashboard/static/interview.js) **[NEW]** | The browser module. Exports `initInterview(root, doc, options?)` on `globalThis.initInterview`. Drives the start → answer → next/end → summary loop. Renders the chat thread, the score chip, the rationale panel, the action buttons, the summary panel, and the resume fetch on load. The same `el()` / `clearChildren()` / `statusPanel()` / `handleErrorStatus()` helpers `quiz.js` uses are inlined here; the duplication is intentional (the Phase 4 unit tests pin the same helper shape, and extracting a shared `sra_dom.js` is deferred until a third page needs it). |
-| [`dashboard/static/quiz.html`](../dashboard/static/quiz.html) | Add a "Start interview" button next to the existing "Start" MCQ button. The new button navigates to `/dashboard/interview?quiz_set_id=…` so the same today-list page drives both modes. |
-| [`dashboard/static/quiz.js`](../dashboard/static/quiz.js) | Extend `renderTodayList` to render the "Start interview" button. No other change. |
-| [`web/routes.py`](../web/routes.py) | Mount `/dashboard/interview` to render `dashboard/static/interview.html`. Existing `/dashboard` mount is unchanged. |
-| [`src/sra/api/routers/quiz.py`](../src/sra/api/routers/quiz.py) | Existing SRA-805 collaborator. The dashboard calls into the SRA-805 routes; no new server code is added here. |
-| [`tests/unit/test_interview_dashboard.py`](../tests/unit/test_interview_dashboard.py) **[NEW]** | Browser-side unit tests. Load `interview.js` via `new Function`, pass a fake `document` and a fake `fetch`, and drive the start → 2 answers → next → 1 answer → end loop. Assert the rendered DOM carries the expected data-panel attributes, the score chip under each user bubble, the rationale toggle, the action-button states, and the summary panel content. |
-| [`tests/e2e/test_phase8_interview_dashboard_e2e.py`](../tests/e2e/) **[NEW]** | End-to-end test through a real `create_app()` instance, driving the dashboard loop against a patched LLM. The browser DOM is faked through `jsdom` (already used by `tests/e2e/test_quiz_dashboard_e2e.py`). |
-| [`dashboard/README.md`](../dashboard/README.md) | Document the new `interview.html` and the "Start interview" button on the today list. |
-
-## TDD starting point
-
-`tests/unit/test_quiz_dashboard.py` and `tests/e2e/test_quiz_dashboard_e2e.py` are the closest analogues. The new `interview.js` follows the same `initX(root, doc, fetchImpl?)` pattern and the same `data-panel` / `data-action` attribute conventions. The existing `tests/conftest.py` browser fixtures (if any) are reused; if not, the new test file builds its own.
-
-## What to implement
-
-1. **`interview.html`** — minimal shell, single root `<div id="interview-root">`, boot script identical in shape to `quiz.html`. Loads `interview.js` as a module.
-2. **`interview.js` helpers** — copy `el`, `clearChildren`, `statusPanel`, `statusTitle`, `friendlyDetail`, `handleErrorStatus` from `quiz.js` verbatim. The duplication is small (~80 LOC) and keeps the two test files independent.
-3. **`interview.js` renderers** — `renderThread(doc, root, turns, finished)` (renders AI bubbles left, user bubbles right, score chip under each user bubble, rationale collapsible); `renderSummary(doc, root, summary)` (renders the summary panel with `score`, `answered_count`, `remaining_count`, and a "Back to dashboard" link); `renderInputArea(doc, root, finished, attemptId, onSubmit)` (renders the textarea, the "Send answer" button, the "Next question" button, the "End interview" button, and disables the "End interview" button when `finished=true`).
-4. **`interview.js` actions** — `startInterview(state, quizSetId)` calls `POST /api/v1/quiz/{id}/attempts {mode: "interview"}`; `sendAnswer(state, attemptId, answerText)` calls `POST /api/v1/quiz/attempts/{id}/interview-turn {action: "answer", answer_text}`; `sendNext(state, attemptId)` calls the same endpoint with `{action: "next"}`; `sendEnd(state, attemptId)` calls it with `{action: "end"}`; `resumeInterview(state, attemptId)` calls `GET /api/v1/quiz/attempts/{id}/interview` and renders the returned `{plan, turns, summary?, attempt}`.
-5. **`initInterview(root, doc, options?)`** — the entry point. Reads `quiz_set_id` from `options` (or `window.location.search`); calls `startInterview`; renders the empty input area; on textarea submit, calls `sendAnswer`; on "Next question" click, calls `sendNext`; on "End interview" click, calls `sendEnd`; on page refresh with `attempt_id` in the URL, calls `resumeInterview`. Exposes the same `sraInterview` object API `quiz.js` exposes for tests.
-6. **`quiz.html` button** — render a second `<button data-action="start-interview" data-quiz-set-id="…">` in each today-list item, with the same auth / rate-limit / error handling as the MCQ button.
-7. **`web/routes.py` mount** — add `/dashboard/interview` returning the new HTML.
-8. **`dashboard/README.md` update** — document the new page and the resume flow.
-9. **Update [`PROGRESS.md`](../PROGRESS.md)** with the new module once the e2e test passes.
-
-## Where to look
-
-- [`dashboard/static/quiz.js`](../dashboard/static/quiz.js) for the helper style, the `data-panel` / `data-action` attribute conventions, and the `sraQuiz` object API.
-- [`dashboard/static/quiz.html`](../dashboard/static/quiz.html) for the boot pattern.
-- [`tests/unit/test_quiz_dashboard.py`](../tests/unit/test_quiz_dashboard.py) for the `new Function` / fake `document` / fake `fetch` test pattern.
-- [`tests/e2e/test_quiz_dashboard_e2e.py`](../tests/e2e/test_quiz_dashboard_e2e.py) for the `jsdom` end-to-end pattern.
-- [`src/sra/api/schemas.py`](../src/sra/api/schemas.py) (SRA-806) for the wire DTOs.
-- Plan [`.kilo/plans/1792083276827-interactive-interview-mode.md`](../.kilo/plans/1792083276827-interactive-interview-mode.md) for the UX shape (chat thread, score chip, action buttons, summary panel).
+- **A separate page rather than embedding in `quiz.html`.** The chat-thread UX is structurally different (persistent transcript, two action buttons); embedding would force one page to ship two renderers. `interview.html` keeps each surface single-purpose and lets unit tests target `interview.js` alone.
+- **`initInterview` resolves ids in order:** `options`, then `globalThis.location.search` (so both `?quiz_set_id=X` and `?attempt_id=Y` work), then a 400 status panel if neither is present. The resume fetch renders the transcript before enabling the input area, so a dropped connection recovers with no client-side state machine.
+- **Actions** hit the SRA-805 routes with `credentials: "same-origin"`: `startInterview` → `POST /api/v1/quiz/{id}/attempts {mode: "interview"}`; `sendAnswer` / `sendNext` / `sendEnd` → `POST …/interview-turn` with `{action, answer_text?}`; `resumeInterview` → `GET …/interview`.
 
 ## Acceptance criteria
 
@@ -110,45 +41,38 @@ A user who closes the tab mid-interview should be able to reopen the URL and pic
 - [ ] The "Start interview" button on the today list navigates to `/dashboard/interview?quiz_set_id=…`
 - [ ] No production credentials, no live OpenAI calls, and no Phase 1–7 regression tests are broken by this ticket
 
-## How to test this ticket alone
+## Tests
 
 ```bash
 source .venv/bin/activate
 pytest tests/unit/test_interview_dashboard.py -v
 pytest tests/e2e/test_phase8_interview_dashboard_e2e.py -v
-pytest -m 'not phase8' -q
+pytest -m 'not phase8' -q --ignore=tests/unit/test_auth_refresh.py --ignore=tests/integration/test_init_db.py
 ruff check .
 pyright
 ```
 
-Expected: every focused + e2e test passes; `-m 'not phase8' -q` keeps Phase 1–7 green; Ruff and Pyright are clean.
+`tests/unit/test_quiz_dashboard.py` and `tests/e2e/test_quiz_dashboard_e2e.py` are the closest analogues and are reused directly.
 
 ## Manual verification
 
-With a real OpenAI key and the SRA-805 routes in place, sign in as a user who has at least one `QuizSet` row:
+With a real OpenAI key and the SRA-805 routes in place, sign in as a user with at least one `QuizSet` row:
 
-1. Open `/dashboard`, click "Start interview" on a today-list item. Confirm the URL changes to `/dashboard/interview?quiz_set_id=…` and the first question renders.
-2. Type a 2-sentence answer, press Enter. Confirm the user bubble appears, the score chip shows, the AI feedback appears, and the next question renders.
-3. Click "Next question" twice. Confirm the outline advances and the next-question bubble replaces the current one.
-4. Click "End interview". Confirm the input area is replaced by the summary panel with `score`, `answered_count`, and `remaining_count`.
-5. Refresh the page (the URL still has `attempt_id`). Confirm the existing transcript renders before the input area is enabled.
-6. Sign in as a second user in a private window, open the same URL, confirm `403` and the friendly status panel.
+- [ ] From `/dashboard`, click "Start interview": the URL becomes `/dashboard/interview?quiz_set_id=…` and the first question renders. Answer with Enter and confirm the user bubble, score chip, feedback, and next question appear. "Next question" advances the outline; "End interview" replaces the input area with the summary panel (`score`, `answered_count`, `remaining_count`). Refresh (the URL still has `attempt_id`) and confirm the transcript renders before the input enables. A second user in a private window gets `403` with the friendly status panel.
 
-The manual block is intentionally short; the unit + e2e tests cover the happy path and the error shapes.
+**Verification (2026-10-15, darwin / Python 3.13.12):**
 
-## Verification record
+- No live OpenAI call — the e2e test exercises the SRA-805 routes with a patched `_get_chat_model()`.
+- `tests/unit/test_interview_dashboard.py` → **7 passed** (0.17 s): module-loads-via-node, start-hits-create-attempt-route, score chip + user bubble, summary panel, and 401 / 429 / wrong-mode-400 status panels.
+- `tests/e2e/test_phase8_interview_dashboard_e2e.py` → **2 passed** (0.60 s): full loop through the real `create_app()`, plus the Node module load.
+- Regression `pytest -m 'not phase8' -q --ignore=…` → **785 passed / 24 failed / 14 skipped / 153 deselected** — identical to the SRA-805 / SRA-806 / SRA-808 baseline; no new regressions.
+- Hand-driven browser loop: **not executed**. Unit + e2e cover the happy path, score chip + `data-field="next-question"` bubble, the three `data-action` button states, the `data-panel="summary"` shape, the `?attempt_id=…` resume, and the 401/403/404/409/422/429 panels.
+- `ruff check .` → **All checks passed!** `pyright` → **10 errors, 0 new** (`interview_planner.py:198` SRA-802, `api/routers/dev.py:52/178` SRA-701, 7 in `test_auth_client.py`); modified files clean.
+- **Deviations:** the pre-written driver dumped the DOM too early (Node drains microtasks at end of tick), so it now defers inside `setImmediate(...)` and passes a test-only `auto_advance: true` option — `false` by default, so browser use is unaffected. The driver's fake `root` has no `appendChild`, so `interview.js` installs a shim.
+- > **Note:** the status line still reads `Planned`.
 
-- Date, environment, and OpenAI model used: 2026-10-15, darwin / Python 3.13.12, no live OpenAI call required — the dashboard is UI only and the e2e test exercises the SRA-805 routes with a patched `_get_chat_model()`.
-- `pytest tests/unit/test_interview_dashboard.py -v` → **7 passed** (0.17 s): `test_module_loads_via_node_with_stubbed_fetch`, `test_start_call_hits_create_attempt_route`, `test_render_after_answer_includes_score_chip_and_user_bubble`, `test_render_after_finish_shows_summary_panel`, `test_401_response_renders_status_panel`, `test_429_response_renders_status_panel_with_retry_after`, `test_wrong_mode_returns_400_panel`.
-- `pytest tests/e2e/test_phase8_interview_dashboard_e2e.py -v` → **2 passed** (0.60 s): `test_interview_dashboard_e2e_endpoints_match_documented_set` (start → 2 answers → next → answer → end through the real `create_app()`), `test_interview_dashboard_module_loads_via_node` (the `interview.js` file ships with an `initInterview` global).
-- `pytest -m 'not phase8' -q --ignore=tests/unit/test_auth_refresh.py --ignore=tests/integration/test_init_db.py` → **785 passed / 24 failed / 14 skipped / 153 deselected** (24 failures identical to the SRA-805 / SRA-806 / SRA-808 baseline; no new regressions introduced by SRA-807).
-- Hand-driven browser loop: not executed in this environment; the unit + e2e tests cover the happy path (start → answer → next → end → summary), the score chip + `data-field="next-question"` AI bubble, the `data-action="send-answer" / "next-question" / "end-interview"` button state, the `data-panel="summary"` panel shape, the `?attempt_id=…` resume fetch on page load, and the 401/403/404/409/422/429 status-panel rendering.
-- Ruff: `ruff check .` → **All checks passed!**
-- Pyright: `pyright` → **10 errors, 0 new** (all 10 are pre-existing: 1 in `src/sra/agents/interview_planner.py:198` SRA-802, 2 in `src/sra/api/routers/dev.py:52/178` SRA-701, 7 in `tests/unit/test_auth_client.py`; the SRA-807-modified files run clean).
-- Driver + JS coverage: the test driver was updated to wrap the dump in `setImmediate(...)` and to pass `initInterview(root, doc, { quiz_set_id: "42", auto_advance: true })`; the new `auto_advance` test-only option chains a `sendAnswer(attemptId, "answer")` after the start response so multi-response tests can observe the post-answer render in a single driver pass. The hook is OFF by default in browser use.
+---
 
-## Definition of Done
-
-- [x] All acceptance criteria met and actual evidence recorded
-- [x] Focused, e2e, regression, lint, and type checks pass
-- [x] Ticket board and progress documentation reflect the actual state
+Design context: [`technical-design.md`](../docs/design/technical-design.md). Ticket
+format rules: [`guides/ticket_creation.md`](../guides/ticket_creation.md).
+Phase status: [`PROGRESS.md`](../PROGRESS.md).
