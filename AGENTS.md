@@ -8,6 +8,7 @@ when its task comes up; the user should not need to repeat these preferences.
 | Plan, organize, stage, or create Git commits | [`guides/commits.md`](guides/commits.md) |
 | Create, split, organize, or improve tickets | [`guides/ticket_creation.md`](guides/ticket_creation.md) |
 | Implement a new task (ticket → TDD tests via subagent → implementation) | [`guides/tdd_workflow.md`](guides/tdd_workflow.md) |
+| Run an Application Self-Heal pass (baseline, test harness, classify failures, file and repair bug tickets, verify, report) | [`guides/self_heal.md`](guides/self_heal.md) |
 
 Use [`CONTRIBUTING.md`](CONTRIBUTING.md) for development checks and conventions,
 [`tests/README.md`](tests/README.md) for current test commands and intentional
