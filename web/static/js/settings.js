@@ -24,6 +24,7 @@
       timezone: form.timezone.value.trim(),
       quiz_question_count: Number(form.quiz_question_count.value),
       quiz_option_count: Number(form.quiz_option_count.value),
+      audio_enabled: Boolean(form.audio_enabled && form.audio_enabled.checked),
     };
   }
 
@@ -63,6 +64,10 @@
       form.quiz_option_count.value = saved.quiz_option_count;
       form.preferred_review_time.value = saved.preferred_review_time;
       form.timezone.value = saved.timezone;
+      if (form.audio_enabled) form.audio_enabled.checked = Boolean(saved.audio_enabled);
+      window.dispatchEvent(new CustomEvent("sra:audio-preference", {
+        detail: { enabled: Boolean(saved.audio_enabled) },
+      }));
       setStatus("Preferences saved.", "success");
     } catch (err) {
       setStatus("Network error: " + (err && err.message ? err.message : String(err)), "error");

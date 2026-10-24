@@ -1,97 +1,70 @@
 {% extends "base.html" %}
-{% block title %}Spaced Repetition Agent &mdash; remember what you learn{% endblock %}
+{% block title %}Spaced Repetition &mdash; make what you learn stick{% endblock %}
+{% block main_class %}landing-main{% endblock %}
 {% block content %}
-<section class="hero">
-  <h1>Remember what you learn.</h1>
-  <p class="lede">
-    A self-hosted study companion that turns notes and voice captures into
-    daily review quizzes, so spaced repetition runs in the background while
-    you focus on the work.
-  </p>
-  {% if current_user %}
-    <p class="cta-row">
-      <a class="button primary" href="/dashboard">Open dashboard</a>
-      <a class="button" href="/quiz">Start today's quiz</a>
-      <a class="button" href="/settings">Adjust preferences</a>
-    </p>
-  {% else %}
-    <p class="cta-row">
-      {% if auth_configured %}
-        <a class="button primary" href="{{ google_login_url }}">Sign in with Google</a>
-      {% else %}
-        <span class="muted">Sign-in is not configured on this server yet.</span>
-      {% endif %}
-    </p>
-  {% endif %}
-</section>
-
-{% if current_user %}
-<section class="capture-card" aria-labelledby="capture-heading">
-  <header class="capture-header">
-    <h2 id="capture-heading">Capture a study note</h2>
-    <p class="muted">
-      Paste a transcript, type freely, or dictate with your microphone. The
-      agent extracts topics, summaries, and tags and schedules spaced reviews.
-    </p>
-  </header>
-
-  <form id="capture-form" class="stacked-form" autocomplete="off">
-    <div class="field">
-      <label for="capture-transcript">Transcript</label>
-      <textarea
-        id="capture-transcript"
-        name="transcript"
-        rows="6"
-        placeholder="e.g. Today I studied photosynthesis: the light-dependent reactions in the thylakoid membrane convert light into chemical energy..."
-        required
-      ></textarea>
-      <p class="hint muted" id="capture-record-hint">
-        Voice capture uses your browser's built-in speech recognition. It works
-        in Chrome and Safari; on Firefox, paste or type instead.
-      </p>
+<div class="landing-page">
+  <section class="landing-hero" aria-labelledby="landing-title">
+    <div class="hero-glow hero-glow-one" aria-hidden="true"></div>
+    <div class="hero-glow hero-glow-two" aria-hidden="true"></div>
+    <div class="hero-note hero-note-left" aria-hidden="true">
+      <span class="note-label">TODAY'S NOTE</span>
+      <strong>Retrieval makes a memory stronger.</strong>
+      <span class="note-rule"></span><small>Learning science</small>
     </div>
-    <div class="form-actions capture-actions">
-      <button type="button" id="capture-record" class="button" aria-pressed="false">
-        <span class="capture-record-label" data-state="idle">Record</span>
-      </button>
-      <button type="submit" id="capture-submit" class="button primary">
-        Capture
-      </button>
-      <button type="button" id="capture-clear" class="button">Clear</button>
-      <span id="capture-status" class="status" role="status" aria-live="polite"></span>
+    <div class="hero-note hero-note-right" aria-hidden="true">
+      <span class="note-label">UP NEXT</span><strong>Photosynthesis</strong>
+      <small>Review in 12 minutes</small><span class="mini-progress"><i></i></span>
     </div>
-  </form>
-
-  <section class="capture-results" aria-labelledby="capture-results-heading">
-    <h3 id="capture-results-heading">Saved entries</h3>
-    <p class="muted" id="capture-results-empty">
-      Nothing captured yet. Submitted notes will appear here.
-    </p>
-    <ul id="capture-results-list" class="capture-results-list" hidden></ul>
+    <div class="landing-hero-copy">
+      <p class="eyebrow"><span></span> Your daily learning companion</p>
+      <h1 id="landing-title">Learn it once.<br><em>Remember it for good.</em></h1>
+      <p class="lede">Turn scattered notes into a calm, daily practice. Capture what matters, review at the right moment, and watch your knowledge compound.</p>
+      <div class="cta-row landing-actions">
+        {% if current_user %}
+          <a class="button primary landing-primary" href="/dashboard">Continue learning <span aria-hidden="true">&rarr;</span></a>
+          <a class="text-link" href="/quiz">Start today&rsquo;s quiz <span aria-hidden="true">&rarr;</span></a>
+        {% elif auth_configured %}
+          <a class="button primary landing-primary" href="{{ google_login_url }}">Get started for free <span aria-hidden="true">&rarr;</span></a>
+          <a class="text-link" href="#how-it-works">See how it works <span aria-hidden="true">&darr;</span></a>
+        {% else %}<span class="muted auth-unavailable">Sign-in is not configured on this server yet.</span>{% endif %}
+      </div>
+      <p class="hero-footnote">Private by design <span aria-hidden="true">&middot;</span> Self-hosted <span aria-hidden="true">&middot;</span> Built for focus</p>
+    </div>
+    <div class="learning-preview" aria-label="A preview of the daily learning experience">
+      <div class="preview-window">
+        <div class="preview-topbar"><span class="preview-logo">S</span><span>Today</span><span class="preview-date">Your practice</span></div>
+        <div class="preview-body">
+          <div class="preview-greeting"><span class="preview-kicker">GOOD AFTERNOON</span><strong>A little review goes a long way.</strong></div>
+          <div class="preview-grid">
+            <article class="preview-review-card"><span class="preview-card-label">READY TO REVIEW</span><h2>Why does active recall work?</h2><p>Retrieving an idea strengthens the path back to it.</p><span class="preview-button">Reveal answer</span></article>
+            <aside class="preview-stats"><span class="preview-card-label">THIS WEEK</span><strong>18</strong><p>ideas remembered</p><div class="spark-bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div></aside>
+          </div>
+        </div>
+      </div>
+      <div class="floating-memory" aria-hidden="true"><span class="memory-check">&#10003;</span><span><strong>Memory strengthened</strong><small>Next review in 7 days</small></span></div>
+    </div>
   </section>
-</section>
-{% endif %}
 
-<section class="features">
-  <article>
-    <h2>Capture once</h2>
-    <p>Paste a transcript or dictate notes. The agent extracts topics,
-       summaries, and tags for you.</p>
-  </article>
-  <article>
-    <h2>Quiz daily</h2>
-    <p>A fresh set of multiple-choice questions is generated each morning
-       against what you actually captured.</p>
-  </article>
-  <article>
-    <h2>Stay on schedule</h2>
-    <p>Pick your review time and timezone. The agent surfaces today's set
-       and tracks what you've already completed.</p>
-  </article>
-</section>
+  <section class="landing-proof" aria-label="Product promise"><p>Knowledge shouldn&rsquo;t disappear after the moment you learn it.</p><span aria-hidden="true"></span><strong>Capture less. Recall more.</strong></section>
+
+  <section class="landing-process" id="how-it-works" aria-labelledby="process-heading">
+    <div class="section-intro"><p class="eyebrow"><span></span> A simple learning rhythm</p><h2 id="process-heading">From passing thought<br>to lasting knowledge.</h2><p>Spaced Repetition handles the timing, so you can stay curious and keep moving.</p></div>
+    <div class="process-grid">
+      <article class="process-card capture-step"><div class="process-number">01</div><div class="process-icon" aria-hidden="true"><svg viewBox="0 0 48 48"><path d="M14 10h20v28H14zM19 18h10M19 24h10M19 30h6"/></svg></div><h3>Capture naturally</h3><p>Type, paste, or speak a note. The agent finds the ideas worth remembering and organizes them for you.</p></article>
+      <article class="process-card review-step"><div class="process-number">02</div><div class="process-icon" aria-hidden="true"><svg viewBox="0 0 48 48"><path d="M12 24a12 12 0 1 0 4-9M12 10v9h9M19 24l4 4 8-9"/></svg></div><h3>Review at the right time</h3><p>A focused daily quiz resurfaces each idea just before it fades, never all at once.</p></article>
+      <article class="process-card remember-step"><div class="process-number">03</div><div class="process-icon" aria-hidden="true"><svg viewBox="0 0 48 48"><path d="M24 39V25M24 25c-8 0-12-5-12-12 8 0 12 4 12 12Zm0 5c7 0 12-4 12-11-7 0-12 4-12 11Z"/></svg></div><h3>Build durable memory</h3><p>Each successful recall strengthens the idea and schedules the next review farther into the future.</p></article>
+    </div>
+  </section>
+
+  {% if current_user %}
+  <section class="capture-card landing-capture" aria-labelledby="capture-heading">
+    <header class="capture-header"><p class="eyebrow"><span></span> Add to your library</p><h2 id="capture-heading">What did you learn today?</h2><p class="muted">Paste a transcript, type freely, or dictate. We&rsquo;ll turn it into organized ideas and a review plan.</p></header>
+    <form id="capture-form" class="stacked-form" autocomplete="off"><div class="field"><label for="capture-transcript">Your note</label><textarea id="capture-transcript" name="transcript" rows="6" placeholder="Today I learned that..." required></textarea><p class="hint muted" id="capture-record-hint">Voice capture works with built-in speech recognition in Chrome and Safari.</p></div><div class="form-actions capture-actions"><button type="button" id="capture-record" class="button" aria-pressed="false"><span class="capture-record-label" data-state="idle">Record</span></button><button type="submit" id="capture-submit" class="button primary">Save to my library</button><button type="button" id="capture-clear" class="button">Clear</button><span id="capture-status" class="status" role="status" aria-live="polite"></span></div></form>
+    <section class="capture-results" aria-labelledby="capture-results-heading"><h3 id="capture-results-heading">Saved entries</h3><p class="muted" id="capture-results-empty">Nothing captured yet. Submitted notes will appear here.</p><ul id="capture-results-list" class="capture-results-list" hidden></ul></section>
+  </section>
+  {% endif %}
+
+  <section class="landing-final-cta"><span class="final-orbit final-orbit-one" aria-hidden="true"></span><span class="final-orbit final-orbit-two" aria-hidden="true"></span><p class="eyebrow">Your future self will thank you</p><h2>Make today&rsquo;s learning<br><em>worth remembering.</em></h2>{% if current_user %}<a class="button primary landing-primary" href="/dashboard">Go to your day <span aria-hidden="true">&rarr;</span></a>{% elif auth_configured %}<a class="button primary landing-primary" href="{{ google_login_url }}">Start remembering <span aria-hidden="true">&rarr;</span></a>{% endif %}</section>
+</div>
 {% endblock %}
-{% block scripts %}
-{% if current_user %}
-<script type="module" src="{{ url_for('web-static', path='/js/landing-capture.js') }}?v={{ static_version }}"></script>
-{% endif %}
-{% endblock %}
+{% block scripts %}{% if current_user %}<script type="module" src="{{ url_for('web-static', path='/js/landing-capture.js') }}?v={{ static_version }}"></script>{% endif %}{% endblock %}

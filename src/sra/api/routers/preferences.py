@@ -25,6 +25,7 @@ def _to_out(prefs: UserPreferences) -> PreferencesOut:
         quiz_option_count=prefs["quiz_option_count"],
         interview_question_count=prefs["interview_question_count"],
         interview_target_minutes=prefs["interview_target_minutes"],
+        audio_enabled=prefs["audio_enabled"],
         wakeup_notification_sent_at=prefs["wakeup_notification_sent_at"],
     )
 
@@ -85,6 +86,8 @@ def put_preferences(
         payload["interview_question_count"] = parsed.interview_question_count
     if parsed.interview_target_minutes is not None:
         payload["interview_target_minutes"] = parsed.interview_target_minutes
+    if "audio_enabled" in parsed.model_fields_set:
+        payload["audio_enabled"] = parsed.audio_enabled
     try:
         prefs = update_user_preferences(user.id, payload, session)
     except UserNotFoundError as exc:

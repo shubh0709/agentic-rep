@@ -1,30 +1,36 @@
 {% extends "base.html" %}
-{% block title %}Sign in &middot; Spaced Repetition Agent{% endblock %}
+{% block title %}Welcome back &middot; Spaced Repetition{% endblock %}
 {% block content %}
-<section class="signin-card">
-  <h1>Sign in</h1>
-  <p class="lede">
-    Sign in to load your quizzes, preferences, and review history. We use
-    Google to verify your identity &mdash; no password is stored on this
-    server.
-  </p>
-  {% if auth_configured %}
-    <p class="cta-row">
-      <a class="button primary google" href="{{ google_login_url }}">
-        Continue with Google
-      </a>
-    </p>
-  {% else %}
-    <p class="error">
-      Google OAuth is not configured. The server administrator needs to
-      set <code>GOOGLE_CLIENT_ID</code>, <code>GOOGLE_CLIENT_SECRET</code>,
-      and <code>AUTH_SIGNING_SECRET</code> in <code>.env</code> before
-      sign-in is available.
-    </p>
-  {% endif %}
-  <p class="hint">
-    After sign-in you'll be redirected to
-    {% if next %}<code>{{ next }}</code>{% else %}your daily quiz{% endif %}.
-  </p>
+<section class="signin-page">
+  <div class="signin-story">
+    <p class="eyebrow"><span></span> A quieter way to learn</p>
+    <h1>Come back to the ideas that <em>matter.</em></h1>
+    <p>One thoughtful review today makes tomorrow&rsquo;s recall easier.</p>
+    <div class="signin-memory-card" aria-hidden="true">
+      <span class="preview-card-label">TODAY&rsquo;S THOUGHT</span>
+      <blockquote>&ldquo;Memory is the residue of thought.&rdquo;</blockquote>
+      <small>&mdash; Daniel T. Willingham</small>
+      <div class="signin-card-footer"><span>Ready for review</span><i>&rarr;</i></div>
+    </div>
+  </div>
+  <div class="signin-panel">
+    <div class="signin-panel-inner">
+      <span class="signin-mark" aria-hidden="true">S</span>
+      <p class="eyebrow">Welcome back</p>
+      <h2>Sign in to your learning space</h2>
+      <p class="signin-explainer">Your notes, review schedule, and progress are waiting right where you left them.</p>
+      {% if auth_configured %}
+        <a class="button google signin-google" href="{{ google_login_url }}">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#4285f4" d="M22.6 12.2c0-.7-.1-1.5-.2-2.2H12v4.3h6a5.1 5.1 0 0 1-2.2 3.3v2.8h3.6c2.1-2 3.2-4.8 3.2-8.2Z"/><path fill="#34a853" d="M12 23c3 0 5.5-1 7.4-2.6l-3.6-2.8c-1 .7-2.3 1-3.8 1a6.5 6.5 0 0 1-6.1-4.5H2.2V17A11.2 11.2 0 0 0 12 23Z"/><path fill="#fbbc05" d="M5.9 14.1a6.7 6.7 0 0 1 0-4.2V7H2.2a11.1 11.1 0 0 0 0 10l3.7-2.9Z"/><path fill="#ea4335" d="M12 5.4c1.7 0 3.1.6 4.3 1.7l3.2-3.2A10.7 10.7 0 0 0 2.2 7l3.7 2.9A6.5 6.5 0 0 1 12 5.4Z"/></svg>
+          Continue with Google
+        </a>
+      {% else %}
+        <p class="error signin-error">Google OAuth is not configured. Ask the server administrator to set the Google client credentials and authentication signing secret.</p>
+      {% endif %}
+      <p class="signin-privacy"><span aria-hidden="true">&#10003;</span> We use Google only to verify your identity. Your Google password is never stored.</p>
+      {% if next %}<p class="hint">After sign-in you&rsquo;ll continue to <code>{{ next }}</code>.</p>{% endif %}
+      <a class="signin-back" href="/">&larr; Back to home</a>
+    </div>
+  </div>
 </section>
 {% endblock %}

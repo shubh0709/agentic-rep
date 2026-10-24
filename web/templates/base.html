@@ -8,18 +8,37 @@
   <link rel="stylesheet" href="{{ url_for('web-static', path='/css/site.css') }}?v={{ static_version }}">
   {% block head_extra %}{% endblock %}
 </head>
-<body>
-  <header class="site-header">
-    <a class="brand" href="/">Spaced Repetition Agent</a>
-    {% include "_nav.html" %}
-  </header>
-  <main class="site-main">
-    {% block content %}{% endblock %}
-  </main>
-  <footer class="site-footer">
-    <small>Spaced Repetition Agent &middot; self-hosted study companion</small>
-  </footer>
-  {% block scripts %}{% endblock %}
+<body{% if current_user %} data-user-name="{{ current_user.display_name }}" data-authenticated="true"{% endif %}>
+  <div class="app-shell{% if not current_user %} public-shell{% endif %}">
+    <header class="site-header">
+      <a class="brand" href="/" aria-label="Spaced Repetition Agent home">
+        <span class="brand-mark" aria-hidden="true">S</span>
+        <span>Spaced Repetition</span>
+      </a>
+      {% include "_nav.html" %}
+      {% if current_user %}
+      <section class="voice-dock" aria-label="Website voice controls">
+        <div class="voice-actions">
+          <button type="button" class="voice-button" data-action="play-welcome">Play welcome</button>
+          <button type="button" class="voice-button" data-action="stop-voice">Stop</button>
+        </div>
+        <small class="voice-status" data-voice-status role="status" aria-live="polite">Preparing voice&hellip;</small>
+      </section>
+      {% endif %}
+    </header>
+    <div class="page-frame">
+      <main class="site-main {% block main_class %}{% endblock %}">
+        {% block content %}{% endblock %}
+      </main>
+      <footer class="site-footer">
+        <small>Made for a thoughtful moment of learning.</small>
+      </footer>
+    </div>
+  </div>
   <script src="{{ url_for('web-static', path='/js/auth-fetch.js') }}?v={{ static_version }}"></script>
+  {% if current_user %}
+  <script src="{{ url_for('web-static', path='/js/ambient-voice.js') }}?v={{ static_version }}"></script>
+  {% endif %}
+  {% block scripts %}{% endblock %}
 </body>
 </html>

@@ -19,16 +19,17 @@
       <small class="hint">Local time in your selected timezone.</small>
     </div>
     <div class="field">
-      <label for="timezone">Timezone (IANA)</label>
-      <input
-        type="text"
+      <label for="timezone">Timezone</label>
+      <select
         id="timezone"
         name="timezone"
-        value="{{ preferences.timezone }}"
-        pattern="^[A-Za-z][A-Za-z0-9_+\-/]*$"
         required
       >
-      <small class="hint">e.g. <code>UTC</code>, <code>America/New_York</code>, <code>Europe/London</code>.</small>
+        {% for zone in timezone_options %}
+          <option value="{{ zone }}"{% if zone == preferences.timezone %} selected{% endif %}>{{ zone }}</option>
+        {% endfor %}
+      </select>
+      <small class="hint">Times and daily reminders use this timezone.</small>
     </div>
     <div class="field">
       <label for="quiz_question_count">Questions per quiz (1&ndash;{{ max_question_count }})</label>
@@ -53,6 +54,20 @@
         value="{{ preferences.quiz_option_count }}"
         required
       >
+    </div>
+    <div class="field audio-preference">
+      <label class="toggle-row" for="audio_enabled">
+        <span>
+          <strong>Website voice</strong>
+          <small class="hint">Hear a gentle daily welcome and brief encouragement after study sessions.</small>
+        </span>
+        <input
+          type="checkbox"
+          id="audio_enabled"
+          name="audio_enabled"
+          {% if preferences.audio_enabled %}checked{% endif %}
+        >
+      </label>
     </div>
     <div class="field">
       <label>Last wake-up notification</label>

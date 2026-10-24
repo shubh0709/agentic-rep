@@ -53,6 +53,7 @@ def test_get_preferences_returns_defaults_for_a_fresh_user(client, seeded_user):
         "quiz_option_count": 4,
         "interview_question_count": 6,
         "interview_target_minutes": 5,
+        "audio_enabled": True,
         "wakeup_notification_sent_at": None,
     }
 
@@ -144,6 +145,56 @@ def test_put_preferences_partial_update_preserves_other_interview_field(client, 
     body = response.json()
     assert body["interview_question_count"] == 12
     assert body["interview_target_minutes"] == 7
+
+
+def test_put_preferences_round_trips_audio_and_legacy_body_preserves_it(
+    client, session, seeded_user
+):
+    disable = client.put(
+        "/api/v1/me/preferences",
+        json={
+            "preferred_review_time": "09:00",
+            "timezone": "UTC",
+            "quiz_question_count": 10,
+            "quiz_option_count": 4,
+            "audio_enabled": False,
+        },
+    )
+    assert disable.status_code == 200
+    assert disable.json()["audio_enabled"] is False
+
+    legacy_update = client.put(
+        "/api/v1/me/preferences",
+        json={
+            "preferred_review_time": "08:15",
+            "timezone": "UTC",
+            "quiz_question_count": 8,
+            "quiz_option_count": 4,
+        },
+    )
+    assert legacy_update.status_code == 200
+    assert legacy_update.json()["audio_enabled"] is False
+
+    stored = session.exec(select(User).where(User.id == seeded_user.id)).one()
+    assert stored.audio_enabled is False
+
+
+def test_put_preferences_rejects_non_boolean_audio_value(client):
+    response = client.put(
+        "/api/v1/me/preferences",
+        json={
+            "preferred_review_time": "09:00",
+            "timezone": "UTC",
+            "quiz_question_count": 10,
+            "quiz_option_count": 4,
+            "audio_enabled": "yes",
+        },
+    )
+
+    assert response.status_code == 400
+    assert {error["field"] for error in response.json()["detail"]} == {
+        "audio_enabled"
+    }
 
 
 def test_put_preferences_rejects_invalid_legacy_4_field_inputs(client):

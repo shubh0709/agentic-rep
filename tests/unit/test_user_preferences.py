@@ -35,6 +35,7 @@ def test_defaults_match_design_for_a_freshly_created_user():
     assert user.timezone == "UTC"
     assert user.quiz_question_count == 10
     assert user.quiz_option_count == 4
+    assert user.audio_enabled is True
     assert user.wakeup_notification_sent_at is None
 
 
@@ -130,6 +131,7 @@ def test_get_user_preferences_returns_defaults_for_a_fresh_user(session, seeded_
         "quiz_option_count": 4,
         "interview_question_count": 6,
         "interview_target_minutes": 5,
+        "audio_enabled": True,
         "wakeup_notification_sent_at": None,
     }
 
@@ -211,6 +213,7 @@ def test_user_preferences_typed_dict_exposes_documented_keys():
         "quiz_option_count",
         "interview_question_count",
         "interview_target_minutes",
+        "audio_enabled",
         "wakeup_notification_sent_at",
     }
 
@@ -225,12 +228,14 @@ def test_preferences_in_schema_round_trips_valid_payload():
         quiz_option_count=4,
         interview_question_count=6,
         interview_target_minutes=5,
+        audio_enabled=False,
     )
 
     assert payload.preferred_review_time == "07:30"
     assert payload.timezone == "America/Los_Angeles"
     assert payload.quiz_question_count == 10
     assert payload.quiz_option_count == 4
+    assert payload.audio_enabled is False
 
     out = PreferencesOut(**payload.model_dump())
     assert out.model_dump() == payload.model_dump()
@@ -278,6 +283,31 @@ def test_preferences_in_schema_rejects_extra_fields():
     }
     with pytest.raises(ValidationError):
         PreferencesIn.model_validate(payload)
+
+
+def test_audio_preference_persists_without_changing_other_preferences(session, seeded_user):
+    prefs = repository.update_user_preferences(
+        seeded_user.id, {"audio_enabled": False}, session
+    )
+
+    assert prefs["audio_enabled"] is False
+    assert prefs["preferred_review_time"] == "09:00"
+    assert prefs["quiz_question_count"] == 10
+    stored = session.exec(select(User).where(User.id == seeded_user.id)).one()
+    assert stored.audio_enabled is False
+
+
+def test_audio_preference_requires_a_real_boolean():
+    from sra.api.schemas import PreferencesIn
+
+    base = {
+        "preferred_review_time": "09:00",
+        "timezone": "UTC",
+        "quiz_question_count": 10,
+        "quiz_option_count": 4,
+    }
+    with pytest.raises(ValidationError):
+        PreferencesIn(**base, audio_enabled="yes")
 
 
 def test_user_preferences_module_invariants(session):
