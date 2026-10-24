@@ -111,6 +111,7 @@ def _interview_turn_to_out(turn: InterviewTurn) -> InterviewTurnOut:
         content=turn.content,
         score=turn.score,
         outline_index=turn.outline_index,
+        rationale=turn.rationale,
         created_at=turn.created_at,
     )
 

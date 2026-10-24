@@ -7,6 +7,7 @@
   "use strict";
 
   const API = "/api/v1/quiz";
+  const requestedQuizSetId = new URLSearchParams(window.location.search).get("quiz_set_id");
 
   const root = document.getElementById("quiz-root");
   const status = document.getElementById("quiz-status");
@@ -90,6 +91,18 @@
     }
     list.appendChild(ul);
     root.replaceChildren(list);
+  }
+
+  async function startRequestedQuiz() {
+    setStatus("Loading your selected quiz…");
+    const res = await jsonFetch(`${API}/${encodeURIComponent(requestedQuizSetId)}`);
+    if (!res.ok) {
+      setStatus(describeError(res), "error");
+      root.replaceChildren(panel("error", null));
+      root.firstChild.appendChild(el("p", null, "Choose another quiz from today's list."));
+      return;
+    }
+    await startAttempt(await res.json());
   }
 
   async function startAttempt(quizSet) {
@@ -179,6 +192,9 @@
       }
       const result = await res.json();
       setStatus("Quiz complete.");
+      window.dispatchEvent(new CustomEvent("study:completed", {
+        detail: { kind: "quiz" },
+      }));
       const summary = panel("summary");
       summary.appendChild(el("p", { class: "summary" }, `Score: ${result.score} / ${result.total_questions}`));
       const back = el("a", { class: "button", href: "/quiz" }, "Back to today's quizzes");
@@ -189,7 +205,8 @@
     renderQuestion();
   }
 
-  renderTodayList().catch((err) => {
+  const initialLoad = requestedQuizSetId ? startRequestedQuiz() : renderTodayList();
+  initialLoad.catch((err) => {
     setStatus("Network error: " + (err && err.message ? err.message : String(err)), "error");
   });
 })();
