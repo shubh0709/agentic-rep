@@ -42,6 +42,7 @@ dev = [
     "ruff>=0.7",
     "pyright>=1.1",
     "pre-commit>=3.8",
+    "playwright>=1.64,<2",
 ]
 
 [build-system]

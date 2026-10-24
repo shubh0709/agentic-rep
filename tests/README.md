@@ -12,6 +12,24 @@ pytest -q                       # everything that must pass before a PR merges
 pytest -m 'not phase2' -q       # Phase 1 regressions while working Phase 2
 ```
 
+## Real-browser Playwright suite
+
+The user-facing landing, dashboard, settings, quiz, and interview flows run in
+a real headless Chromium browser against an isolated Uvicorn server and SQLite
+database. Install the browser binary once after the development dependencies:
+
+```bash
+source .venv/bin/activate
+playwright install chromium
+SRA_RUN_PLAYWRIGHT_TESTS=1 pytest tests/playwright/test_user_flows.py -q
+```
+
+The suite replaces model calls with deterministic fakes but keeps browser
+rendering, HTTP, authentication, routing, persistence, and page JavaScript
+real. It is opt-in because the Chromium download is large; without
+`SRA_RUN_PLAYWRIGHT_TESTS=1`, these tests skip instead of weakening the default
+offline suite.
+
 `pip install -e ".[dev]"` is enough: no weights are downloaded and no device is opened. CI runs `pytest` on every push and PR; see [`CONTRIBUTING.md`](../CONTRIBUTING.md) for lint, type checking, and CI.
 
 ## Pytest markers
