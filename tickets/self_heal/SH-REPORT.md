@@ -13,6 +13,94 @@ Process guide: [`guides/self_heal.md`](../../guides/self_heal.md). Per-ticket de
 > below was live **as of the 2026-10-16 pass** and has since been fixed — `pytest -m phase5 -q` is now
 > green (212 passed, 1049 deselected). Current status: [`PROGRESS.md`](../../PROGRESS.md).
 
+## Follow-up real-browser pass — 2026-10-24
+
+This follow-up used Playwright MCP for exploratory end-to-end testing, then
+promoted every confirmed regression into the repository's real-Chromium suite.
+It closed ten application defects ([SH-006](SH-006-dashboard-empty-upcoming-count.md)
+through [SH-013](SH-013-interview-summary-text-hidden.md), plus
+[SH-015](SH-015-missing-favicon-console-error.md) and
+[SH-016](SH-016-static-assets-stale-after-deploy.md)) and made the harness
+reproducible in [SH-014](SH-014-playwright-harness-not-installable.md).
+
+### Current outcome
+
+| Check | Result |
+|---|---|
+| Real Chromium browser suite | **22 passed** in 9.80 s |
+| Default offline suite | **1232 passed, 35 skipped** in 35.71 s |
+| Focused related non-browser suite | **46 passed** |
+| Ruff | **clean** |
+| Pyright | **0 errors, 0 warnings** |
+| Fresh `.[dev]` install constrained by lockfile | Playwright 1.64.0 installed; `pip check` clean |
+
+The first default-suite run inside the filesystem sandbox reported three
+localhost OAuth-loopback failures because socket binding was denied. The same
+complete command passed outside that restriction (1232 passed); those were
+environment failures, not application defects.
+
+### Tickets closed
+
+| ID | Confirmed defect | Regression evidence |
+|---|---|---|
+| SH-006 | Empty upcoming response left the summary count at `—` | Empty dashboard resolves the tile to `0` |
+| SH-007 | Review-window selector changed data but not its summary label | Selecting 7 days renders “Upcoming (next 7 days)” |
+| SH-008 | Authenticated dashboard was 491 px wide in a 375 px viewport | Mobile geometry has no horizontal overflow and Sign out stays visible |
+| SH-009 | Create-topic modal focus escaped into background controls | Shift+Tab wraps from Close to Generate now |
+| SH-010 | Voice stop restored the button but left “Listening” visible | Stubbed recognition start/end resolves label, pressed state, and status |
+| SH-011 | Send, Next, and End interview buttons had no click listeners | Browser clicks reach the real interview routes and persisted attempt |
+| SH-012 | Topic creation inserted a card but left all summary tiles stale | Entry count and scheduled upcoming count refresh without reload |
+| SH-013 | Turn endpoint returned a string summary the UI treated as an object | Exact completion summary renders after a real browser-driven turn |
+| SH-014 | A clean `.[dev]` install could not run Playwright | Dependency, lockfile, docs, and clean temporary install verified |
+| SH-015 | First page load logged `/favicon.ico` as a 404 | Anonymous landing smoke has no page or console errors |
+| SH-016 | Existing browsers reused unversioned pre-deploy JavaScript and CSS | Versioned URLs loaded corrected state in the same MCP browser context |
+
+### Browser coverage matrix
+
+| Feature / endpoint | Scenario | Expected behavior source | Test ID | Status |
+|---|---|---|---|---|
+| Landing `/` | Anonymous and authenticated navigation | Web route/template contract | `test_landing_page_*` | Passed |
+| Static assets | Versioned CSS and page modules; clean initial load | Deployment consistency | `test_landing_page_renders_without_session` | Passed |
+| Landing capture | Pasted transcript persists and renders | SRA-900 browser capture contract | `test_landing_capture_form_*` | Passed |
+| Browser dictation | Start then stop recording | Recorder UI state contract | `test_landing_voice_capture_*` | Passed |
+| Dashboard startup | Empty search, digest, upcoming reads; clean console | SRA-701 dashboard contract | `test_dashboard_starts_*` | Passed |
+| Dashboard filter | 7-day selector updates matching summary | Visible filter/count consistency | `test_dashboard_upcoming_summary_*` | Passed |
+| Dashboard responsive layout | 375 × 667 authenticated viewport | Controls must remain reachable | `test_dashboard_fits_mobile_*` | Passed |
+| Topic modal | Reopen, one submit, focus containment | SRA-902 modal lifecycle/accessibility | `test_create_topic_modal_*` | Passed |
+| Topic authoring | Paste reference → entry, quiz, interview, refreshed stats | SRA-902/SRA-906 workflow | `test_create_topic_with_paste_*` | Passed |
+| Preferences | Valid save, invalid timezone, preserve interview defaults | SRA-501/SRA-801 API contract | `test_settings_page_*` | Passed |
+| Quiz | List, empty state, start, answer, finish, score | SRA-404/SRA-405 web loop | `test_quiz_dashboard_*` | Passed |
+| Interview | Load, Send, Next, End, persisted turn, visible summary | SRA-805/SRA-807 contract | `test_interview_dashboard_*` | Passed |
+| Authentication | Anonymous user cannot open protected settings | Phase 3 route policy | `test_protected_route_*` | Passed |
+| Preferences API | Phase 8 fields remain present | SRA-801 response contract | `test_get_preferences_*` | Passed |
+| Pregeneration | Quiz set remains paired with interview plan | SRA-802/SRA-809 invariant | `test_quiz_pregen_*` | Passed |
+
+### Verification commands
+
+```bash
+source .venv/bin/activate
+SRA_RUN_PLAYWRIGHT_TESTS=1 pytest tests/playwright/test_user_flows.py -q
+pytest tests/unit/test_dashboard_phase9_js.py \
+  tests/unit/test_interview_dashboard.py \
+  tests/integration/test_web_pages.py \
+  tests/e2e/test_dashboard_e2e.py \
+  tests/e2e/test_phase8_interview_dashboard_e2e.py \
+  tests/e2e/test_phase9_dashboard_create_topic_e2e.py \
+  tests/e2e/test_quiz_dashboard_e2e.py -q
+pytest -q
+ruff check .
+pyright
+```
+
+### Remaining gaps
+
+The browser suite substitutes deterministic model responses, Google OAuth,
+and speech-recognition results. It does not prove live OpenAI behavior, real
+Google login, a physical microphone, native macOS Keychain/hotkeys, real phone
+browsers, multi-process rate limiting, or external URL/document quality. The
+pass demonstrates the 22 listed browser scenarios; it does not claim the
+application is bug-free.
+
 ## Outcome
 
 | Status | Test count (was → now) |

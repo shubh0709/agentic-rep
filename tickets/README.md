@@ -141,6 +141,17 @@ Produced by the [`guides/self_heal.md`](../guides/self_heal.md) pass against
 | [SH-003](self_heal/SH-003-scheduler-test-time-bomb.md) | Digest-scheduler tests coupled to the wall clock | Tests control their own `scheduled_date` fixture value |
 | [SH-004](self_heal/SH-004-dev-py-pregensummary-fields.md) | Dev pregen route discards `interview_plans_*` counts | The summary matches its declared shape again |
 | [SH-005](self_heal/SH-005-memory-store-save-pair.md) | `MemoryCredentialStore` test fake lacks `save_pair` | The fake satisfies the credential-store protocol |
+| [SH-006](self_heal/SH-006-dashboard-empty-upcoming-count.md) | Empty dashboard leaves upcoming count unresolved | Resolves the summary tile to zero after an empty response |
+| [SH-007](self_heal/SH-007-dashboard-upcoming-window-label.md) | Upcoming summary label ignores selected window | Keeps the summary label aligned with the review filter |
+| [SH-008](self_heal/SH-008-mobile-dashboard-horizontal-overflow.md) | Mobile dashboard overflows horizontally | Wraps authenticated navigation and controls at phone width |
+| [SH-009](self_heal/SH-009-create-topic-modal-focus-escape.md) | Create-topic modal lets keyboard focus escape | Traps Tab navigation inside the open dialog |
+| [SH-010](self_heal/SH-010-voice-capture-stale-listening-status.md) | Voice capture stays “Listening” after stop | Synchronizes recorder label, pressed state, and live status |
+| [SH-011](self_heal/SH-011-interview-buttons-not-wired.md) | Interview action buttons do nothing | Connects Send, Next, and End to their API actions |
+| [SH-012](self_heal/SH-012-topic-create-leaves-dashboard-stats-stale.md) | Topic creation leaves dashboard summaries stale | Refreshes entry and review summaries after creation |
+| [SH-013](self_heal/SH-013-interview-summary-text-hidden.md) | Completed interview hides its summary text | Renders both turn-string and detail-object summaries |
+| [SH-014](self_heal/SH-014-playwright-harness-not-installable.md) | Playwright harness is not installable from dev dependencies | Declares, locks, and documents the browser harness |
+| [SH-015](self_heal/SH-015-missing-favicon-console-error.md) | Every first page load logs a favicon 404 | Serves an explicit icon and keeps the landing console clean |
+| [SH-016](self_heal/SH-016-static-assets-stale-after-deploy.md) | Existing browsers reuse stale assets after deploy | Versions shared assets and page modules across releases |
 | [SH-REPORT](self_heal/SH-REPORT.md) | Application self-heal completion report | Defects closed and failures still outstanding |
 
 ## Conventions
