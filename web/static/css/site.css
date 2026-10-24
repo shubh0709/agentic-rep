@@ -513,3 +513,29 @@ a:hover { text-decoration: underline; }
   font-size: 0.85rem;
 }
 .entry-regen-note { margin: 4px 0 0; font-size: 0.85rem; }
+
+@media (max-width: 640px) {
+  .site-header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 12px;
+    padding: 12px 16px;
+  }
+  .site-nav {
+    gap: 8px;
+    flex-wrap: wrap;
+    width: 100%;
+  }
+  .site-main { padding: 24px 16px 48px; }
+  .dashboard-card { padding: 20px; }
+  .dashboard-section .section-actions,
+  .search-field,
+  .search-field input[type=search] {
+    width: 100%;
+  }
+  .search-field input[type=search],
+  .search-field select {
+    min-width: 0;
+    max-width: 100%;
+  }
+}

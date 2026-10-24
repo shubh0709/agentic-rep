@@ -26,9 +26,11 @@ from sra.db.models import User
 from sra.db.repository import UserNotFoundError, get_user_preferences
 
 WEB_DIR = Path(__file__).resolve().parent
+STATIC_VERSION = "20261024"
 
 router = APIRouter(tags=["web"], include_in_schema=False)
 templates = Jinja2Templates(directory=str(WEB_DIR / "templates"))
+templates.env.globals["static_version"] = STATIC_VERSION
 
 
 def _google_login_url(settings: Settings) -> str:

@@ -196,6 +196,11 @@
     appendChild(panel, el(doc, "h2", null, "Interview summary"));
     if (!summary) {
       appendChild(panel, el(doc, "p", null, "No summary available."));
+    } else if (typeof summary === "string") {
+      appendChild(
+        panel,
+        el(doc, "p", { "data-field": "summary-text" }, summary)
+      );
     } else {
       if (typeof summary.score === "number") {
         appendChild(
@@ -261,25 +266,38 @@
     }
     appendChild(area, ta);
     appendChild(area, el(doc, "br"));
-    appendChild(
-      area,
-      el(doc, "button", { "data-action": "send-answer", type: "button" }, "Send answer")
+    var sendButton = el(
+      doc, "button", { "data-action": "send-answer", type: "button" }, "Send answer"
     );
-    appendChild(
-      area,
-      el(doc, "button", { "data-action": "next-question", type: "button" }, "Next question")
+    var nextButton = el(
+      doc, "button", { "data-action": "next-question", type: "button" }, "Next question"
     );
-    appendChild(
-      area,
-      el(doc, "button", { "data-action": "end-interview", type: "button" }, "End interview")
+    var endButton = el(
+      doc, "button", { "data-action": "end-interview", type: "button" }, "End interview"
     );
+    appendChild(area, sendButton);
+    appendChild(area, nextButton);
+    appendChild(area, endButton);
     appendChild(root, area);
     if (typeof onSubmit === "function") {
+      sendButton.addEventListener && sendButton.addEventListener("click", function () {
+        onSubmit(ta.value || "");
+      });
       ta.addEventListener && ta.addEventListener("keydown", function (ev) {
         if (ev && ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) {
           ev.preventDefault();
           onSubmit(ta.value || "");
         }
+      });
+    }
+    if (typeof onNext === "function") {
+      nextButton.addEventListener && nextButton.addEventListener("click", function () {
+        onNext();
+      });
+    }
+    if (typeof onEnd === "function") {
+      endButton.addEventListener && endButton.addEventListener("click", function () {
+        onEnd();
       });
     }
   }

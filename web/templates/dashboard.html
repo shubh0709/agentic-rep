@@ -21,7 +21,7 @@
       <span class="stat-value" id="stat-due-today">&mdash;</span>
     </article>
     <article class="stat-tile" data-stat="upcoming">
-      <span class="stat-label">Upcoming (next 30 days)</span>
+      <span class="stat-label" id="stat-upcoming-label">Upcoming (next 30 days)</span>
       <span class="stat-value" id="stat-upcoming-total">&mdash;</span>
     </article>
   </div>
@@ -74,5 +74,5 @@
 </section>
 {% endblock %}
 {% block scripts %}
-<script type="module" src="{{ url_for('web-static', path='/js/dashboard.js') }}"></script>
+<script type="module" src="{{ url_for('web-static', path='/js/dashboard.js') }}?v={{ static_version }}"></script>
 {% endblock %}

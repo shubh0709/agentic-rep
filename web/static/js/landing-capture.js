@@ -158,6 +158,9 @@
       finalBuffer = "";
       if (recordBtn) recordBtn.setAttribute("aria-pressed", "false");
       if (recordBtn && !recordBtn.disabled) setRecordLabel("idle");
+      if (statusEl && statusEl.textContent.startsWith("Listening.")) {
+        setStatus("Recording stopped. Review or edit your transcript, then capture it.", "");
+      }
       renderTranscript();
     };
 

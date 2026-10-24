@@ -126,7 +126,7 @@ def _answer_response(finished: bool = False, score: int = 70, qtext: str | None 
             "rationale": "ok",
             "feedback": "good",
             "finished": finished,
-            "summary": None,
+            "summary": "Browser interview completed." if finished else None,
             "transcript_so_far": [
                 {"role": "user", "content": "the answer", "score": score, "outline_index": 0},
                 {"role": "ai", "content": "good", "score": None, "outline_index": 0},
@@ -184,7 +184,7 @@ def test_render_after_finish_shows_summary_panel(node_available):
     ]
     output = _run_dashboard(responses)
     serialized = json.dumps(output["dom"])
-    assert "summary" in serialized.lower() or "92" in serialized
+    assert "Browser interview completed." in serialized
 
 
 def test_401_response_renders_status_panel(node_available):

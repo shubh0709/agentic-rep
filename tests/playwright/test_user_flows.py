@@ -42,11 +42,18 @@ def _dashboard_errors(page):
 def test_landing_page_renders_without_session(browser_page, live_server):
     """Anonymous browser (no cookie) still gets the landing page."""
     page = browser_page
+    errors = _dashboard_errors(page)
     page.context.clear_cookies()
 
     response = page.goto(live_server["base_url"] + "/")
     assert response is not None and response.status == 200
     assert "Sign in" in page.content()
+    asset_urls = page.eval_on_selector_all(
+        'link[rel="stylesheet"], script[src]',
+        "nodes => nodes.map(node => node.href || node.src)",
+    )
+    assert asset_urls and all("?v=" in url for url in asset_urls)
+    assert errors == []
 
 
 def test_landing_page_flips_authenticated_nav_for_session_holder(browser_page, live_server):
@@ -104,6 +111,32 @@ def test_landing_capture_form_submits_pasted_transcript_and_renders_entry(browse
     assert any("Mitosis" in (row.get("topic") or "") for row in rows), rows
 
 
+def test_landing_voice_capture_reports_stopped_state(browser_page, live_server):
+    """Stopping browser dictation must clear the stale Listening status."""
+    page = browser_page
+    page.add_init_script(
+        """() => {
+          class FakeSpeechRecognition {
+            start() {}
+            stop() { queueMicrotask(() => this.onend && this.onend()); }
+          }
+          window.SpeechRecognition = FakeSpeechRecognition;
+          window.webkitSpeechRecognition = FakeSpeechRecognition;
+        }"""
+    )
+    page.goto(live_server["base_url"] + "/")
+
+    page.click("#capture-record")
+    assert "Listening" in (page.locator("#capture-status").text_content() or "")
+    page.click("#capture-record")
+    page.wait_for_function(
+        "() => document.querySelector('#capture-status')?.textContent?.includes('Recording stopped')"
+    )
+
+    assert page.locator("#capture-record").get_attribute("aria-pressed") == "false"
+    assert page.locator("#capture-record").text_content().strip() == "Record"
+
+
 @pytest.mark.phase9
 def test_dashboard_starts_without_page_or_console_errors(browser_page, live_server):
     """All three startup reads complete instead of a cross-IIFE ReferenceError."""
@@ -121,7 +154,49 @@ def test_dashboard_starts_without_page_or_console_errors(browser_page, live_serv
     page.wait_for_function(
         "() => !document.querySelector('#upcoming-status')?.textContent?.includes('Loading')"
     )
+    assert page.locator("#stat-upcoming-total").text_content() == "0"
     assert errors == []
+
+
+@pytest.mark.phase9
+def test_dashboard_upcoming_summary_tracks_selected_window(browser_page, live_server):
+    """Changing the review window keeps the summary label honest."""
+    page = browser_page
+    page.goto(live_server["base_url"] + "/dashboard")
+    page.select_option("#upcoming-window", "7")
+    page.wait_for_function(
+        "() => !document.querySelector('#upcoming-status')?.textContent?.includes('Loading')"
+    )
+
+    assert page.locator("#stat-upcoming-label").text_content() == "Upcoming (next 7 days)"
+
+
+@pytest.mark.phase9
+def test_dashboard_fits_mobile_viewport_without_horizontal_scroll(
+    browser_page, live_server
+):
+    """Primary navigation and dashboard content remain usable at phone width."""
+    page = browser_page
+    page.set_viewport_size({"width": 375, "height": 667})
+    page.goto(live_server["base_url"] + "/dashboard")
+    page.wait_for_function(
+        "() => !document.querySelector('#entries-status')?.textContent?.includes('Loading')"
+    )
+
+    geometry = page.evaluate(
+        """() => {
+          const signout = document.querySelector('form[action="/signout"] button');
+          const rect = signout.getBoundingClientRect();
+          return {
+            innerWidth: window.innerWidth,
+            scrollWidth: document.documentElement.scrollWidth,
+            signoutLeft: rect.left,
+            signoutRight: rect.right,
+          };
+        }"""
+    )
+    assert geometry["scrollWidth"] <= geometry["innerWidth"]
+    assert 0 <= geometry["signoutLeft"] < geometry["signoutRight"] <= geometry["innerWidth"]
 
 
 @pytest.mark.phase9
@@ -157,6 +232,19 @@ def test_create_topic_modal_reopens_without_duplicate_submit_requests(
 
 
 @pytest.mark.phase9
+def test_create_topic_modal_traps_keyboard_focus(browser_page, live_server):
+    """Tabbing at either edge of the dialog must not enter the background page."""
+    page = browser_page
+    page.goto(live_server["base_url"] + "/dashboard")
+    page.click('[data-action="create-topic"]')
+
+    page.locator('#create-topic-modal [data-action="close-modal"]').focus()
+    page.keyboard.press("Shift+Tab")
+
+    assert page.evaluate("() => document.activeElement?.dataset?.action") == "submit"
+
+
+@pytest.mark.phase9
 def test_create_topic_with_paste_renders_valid_quiz_and_interview_actions(
     browser_page, live_server
 ):
@@ -182,6 +270,12 @@ def test_create_topic_with_paste_renders_valid_quiz_and_interview_actions(
     assert parsed_interview.path == "/dashboard/interview"
     quiz_ids = parse_qs(parsed_interview.query).get("quiz_set_id", [])
     assert len(quiz_ids) == 1 and quiz_ids[0].isdigit()
+    page.wait_for_function(
+        "() => document.querySelector('#stat-total-entries')?.textContent === '1'"
+    )
+    page.wait_for_function(
+        "() => Number(document.querySelector('#stat-upcoming-total')?.textContent) > 0"
+    )
     assert errors == []
 
 
@@ -359,6 +453,55 @@ def test_interview_dashboard_page_loads_after_introducing_phase8(browser_page, l
     assert "/signin" not in page.url
     body = page.content()
     assert "interview" in body.lower()
+
+
+def test_interview_dashboard_send_button_completes_browser_turn(
+    browser_page, live_server
+):
+    """The visible Send answer button drives the real interview route."""
+    quiz_set_id = _seed_quiz_set_for_today(live_server)
+    page = browser_page
+    page.goto(
+        live_server["base_url"]
+        + f"/dashboard/interview?quiz_set_id={quiz_set_id}"
+    )
+    page.wait_for_selector('[data-panel="answer-input"]', timeout=10_000)
+
+    page.fill(
+        '[data-panel="answer-input"]',
+        "Mitosis separates replicated chromosomes into two nuclei.",
+    )
+    page.click('[data-action="send-answer"]')
+
+    page.wait_for_selector('[data-panel="summary"]', timeout=10_000)
+    assert "Browser interview completed." in page.content()
+
+
+def test_interview_dashboard_next_and_end_buttons_send_actions(
+    browser_page, live_server
+):
+    """The remaining visible interview controls send their named actions."""
+    quiz_set_id = _seed_quiz_set_for_today(live_server)
+    page = browser_page
+    actions: list[str] = []
+
+    def record_action(request):
+        if request.method == "POST" and request.url.endswith("/interview-turn"):
+            actions.append(request.post_data_json["action"])
+
+    page.on("request", record_action)
+    page.goto(
+        live_server["base_url"]
+        + f"/dashboard/interview?quiz_set_id={quiz_set_id}"
+    )
+    page.wait_for_selector('[data-action="next-question"]', timeout=10_000)
+
+    page.click('[data-action="next-question"]')
+    page.wait_for_function("() => document.querySelectorAll('[data-action=\"next-question\"]').length === 1")
+    page.click('[data-action="end-interview"]')
+
+    page.wait_for_selector('[data-panel="summary"]', timeout=10_000)
+    assert actions == ["next", "end"]
 
 
 def test_protected_route_blocks_anonymous_user(browser_page, live_server):

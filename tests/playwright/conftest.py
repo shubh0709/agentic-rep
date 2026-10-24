@@ -154,6 +154,7 @@ def live_server(monkeypatch, tmp_path):
     # Stub the two LLM seams the pregen path hits so the suite never
     # needs a real OPENAI_API_KEY. The MCQ stub inserts deterministic
     # drafts; the planner stub inserts a minimal InterviewOutline.
+    from sra.agents import interview_conversation_graph as _icg
     from sra.agents import interview_planner as _ip
     from sra.agents import quiz_graph as _qg
     from sra.agents.schemas import MCQDraft, StudyEntryDraft, StudyEntryDrafts
@@ -230,10 +231,27 @@ def live_server(monkeypatch, tmp_path):
                 ]
             )
 
+    class _FakeInterviewModel:
+        """Finish a browser-driven interview after one deterministic answer."""
+
+        def with_structured_output(self, schema, **kwargs):  # noqa: ARG002
+            assert schema is _icg.InterviewDecision
+            return self
+
+        def invoke(self, messages, **kwargs):  # noqa: ARG002
+            return _icg.InterviewDecision(
+                score=90,
+                rationale="The answer explains the core mechanism.",
+                feedback="Clear and accurate.",
+                next_action="finish",
+                summary="Browser interview completed.",
+            )
+
     monkeypatch.setattr("sra.jobs.quiz_pregeneration.generate_and_persist_questions", _fake_gap)
     monkeypatch.setattr(_qg, "generate_and_persist_questions", _fake_gap)
     monkeypatch.setattr(_ip, "generate_interview_outline", _fake_outline)
     _ip.generate_interview_outline = _fake_outline  # noqa: SLF001 (parity for direct callers)
+    monkeypatch.setattr(_icg, "_get_chat_model", lambda: _FakeInterviewModel())
     monkeypatch.setattr("sra.agents.ingestion_graph._get_chat_model", lambda: _FakeExtractionModel())
 
     user_id_holder: dict[str, int] = {}

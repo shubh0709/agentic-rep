@@ -8,5 +8,5 @@
 </section>
 {% endblock %}
 {% block scripts %}
-<script type="module" src="{{ url_for('web-static', path='/js/quiz.js') }}"></script>
+<script type="module" src="{{ url_for('web-static', path='/js/quiz.js') }}?v={{ static_version }}"></script>
 {% endblock %}

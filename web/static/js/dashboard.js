@@ -22,6 +22,7 @@
   const upcomingRoot = document.getElementById("upcoming-root");
   const statTotalEntries = document.getElementById("stat-total-entries");
   const statDueToday = document.getElementById("stat-due-today");
+  const statUpcomingLabel = document.getElementById("stat-upcoming-label");
   const statUpcomingTotal = document.getElementById("stat-upcoming-total");
   const searchInput = document.getElementById("entry-search");
   const upcomingWindow = document.getElementById("upcoming-window");
@@ -218,6 +219,7 @@
   // --- upcoming reviews section -------------------------------------------
 
   function renderUpcomingEmpty() {
+    statUpcomingTotal.textContent = "0";
     setStatus(upcomingStatus, "No upcoming reviews in this window.");
     upcomingRoot.replaceChildren(
       panel("empty", null, el("p", null, "Capture a study note to schedule its 1d/3d/7d/1mo/3mo/6mo reviews."))
@@ -225,6 +227,7 @@
   }
 
   function renderUpcoming(days) {
+    if (statUpcomingLabel) statUpcomingLabel.textContent = `Upcoming (next ${days} days)`;
     if (statUpcomingTotal.textContent !== "—") statUpcomingTotal.textContent = "—";
     setStatus(upcomingStatus, `Loading reviews for the next ${days} days…`);
     const res = jsonFetch(UPCOMING_API + "?days=" + encodeURIComponent(String(days)))
@@ -335,7 +338,25 @@
     });
 
     function escClose(event) {
-      if (event.key === "Escape") close();
+      if (event.key === "Escape") {
+        close();
+        return;
+      }
+      if (event.key !== "Tab" || !modal || !backdrop || backdrop.hidden) return;
+
+      const focusable = Array.from(modal.querySelectorAll(
+        'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), a[href]'
+      )).filter((node) => !node.hidden);
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
     }
 
     function close() {
@@ -619,6 +640,8 @@
       const result = await res.json();
       close();
       prependEntryCard(result.entry, result);
+      loadDueToday();
+      renderUpcoming(Number((upcomingWindow && upcomingWindow.value) || 30));
     } catch (err) {
       setModalStatus(
         form,
@@ -667,9 +690,14 @@
     list.insertBefore(card, list.firstChild);
     const status = document.getElementById("entries-status");
     if (status) {
-      const existing = (status.textContent || "").trim();
       const count = list.querySelectorAll(".entry-card").length;
       status.textContent = count + " " + (count === 1 ? "entry" : "entries") + ".";
+    }
+    if (statTotalEntries) {
+      const previousTotal = Number(statTotalEntries.textContent);
+      statTotalEntries.textContent = String(
+        Number.isFinite(previousTotal) ? previousTotal + 1 : 1
+      );
     }
   }
 

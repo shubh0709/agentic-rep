@@ -4,7 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Spaced Repetition Agent{% endblock %}</title>
-  <link rel="stylesheet" href="{{ url_for('web-static', path='/css/site.css') }}">
+  <link rel="icon" href="{{ url_for('web-static', path='/favicon.svg') }}?v={{ static_version }}" type="image/svg+xml">
+  <link rel="stylesheet" href="{{ url_for('web-static', path='/css/site.css') }}?v={{ static_version }}">
   {% block head_extra %}{% endblock %}
 </head>
 <body>
@@ -19,6 +20,6 @@
     <small>Spaced Repetition Agent &middot; self-hosted study companion</small>
   </footer>
   {% block scripts %}{% endblock %}
-  <script src="{{ url_for('web-static', path='/js/auth-fetch.js') }}"></script>
+  <script src="{{ url_for('web-static', path='/js/auth-fetch.js') }}?v={{ static_version }}"></script>
 </body>
 </html>

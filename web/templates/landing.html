@@ -92,6 +92,6 @@
 {% endblock %}
 {% block scripts %}
 {% if current_user %}
-<script type="module" src="{{ url_for('web-static', path='/js/landing-capture.js') }}"></script>
+<script type="module" src="{{ url_for('web-static', path='/js/landing-capture.js') }}?v={{ static_version }}"></script>
 {% endif %}
 {% endblock %}
