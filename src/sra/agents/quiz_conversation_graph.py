@@ -71,8 +71,7 @@ class QuizConversationState(TypedDict, total=False):
 def _get_chat_model() -> ChatOpenAI:
     """Construct the OpenAI model used by `_interpret_answer`.
 
-    Mirrors the seams in ingestion_graph._get_chat_model and
-    quiz_graph._get_chat_model so tests can monkeypatch
+    Mirrors the existing seam in quiz_graph._get_chat_model so tests can monkeypatch
     ``sra.agents.quiz_conversation_graph._get_chat_model`` with a fake
     model that returns scripted InterpretedAnswer instances, avoiding any
     live OpenAI call.

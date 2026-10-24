@@ -238,6 +238,7 @@ class InterviewPlannerState(TypedDict):
     entry: StudyEntry
     target_questions: int
     references: list[tuple[str, str]]
+    focus_topics: list[str]
     outline: InterviewOutline
     error: str | None
 
@@ -317,6 +318,7 @@ def _build_messages(
     *,
     transcript_slice: str,
     target_questions: int,
+    focus_topics: list[str] | None = None,
 ) -> tuple[SystemMessage, HumanMessage]:
     """Render the SRA-904 six-section system prompt + a references /
     transcript / metadata human message.
@@ -348,6 +350,8 @@ def _build_messages(
     if entry.tags:
         lines.append(f"  Tags: {', '.join(entry.tags)}")
     lines.append(f"  Summary: {entry.summary}")
+    if focus_topics:
+        lines.append(f"  Required focus topics: {', '.join(focus_topics)}")
     lines.append("")
     lines.append(
         f"Generate exactly {target_questions} open-ended interview "
@@ -401,6 +405,7 @@ def _call_planner(state: InterviewPlannerState) -> dict[str, Any]:
         references,
         transcript_slice=transcript_slice,
         target_questions=target_questions,
+        focus_topics=state.get("focus_topics"),
     )
     try:
         model = _get_chat_model()
@@ -464,6 +469,7 @@ def generate_interview_outline(
     *,
     llm: Any | None = None,
     references: list[tuple[str, str]] | None = None,
+    focus_topics: list[str] | None = None,
 ) -> InterviewOutline:
     """Return a validated ``InterviewOutline`` of exactly ``target_questions`` items.
 
@@ -491,6 +497,7 @@ def generate_interview_outline(
         refs,
         transcript_slice=transcript_slice,
         target_questions=target_questions,
+        focus_topics=focus_topics,
     )
     try:
         model = llm if llm is not None else _get_chat_model()

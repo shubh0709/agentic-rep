@@ -280,6 +280,7 @@ def _append_turn(
     content: str,
     score: int | None = None,
     outline_index: int | None = None,
+    rationale: str | None = None,
 ) -> InterviewTurn:
     """Append a single ``InterviewTurn`` row via the SRA-804 helper."""
     return repository.append_interview_turn(
@@ -288,6 +289,7 @@ def _append_turn(
         content=content,
         score=score,
         outline_index=outline_index,
+        rationale=rationale,
         session=session,
     )
 
@@ -430,6 +432,7 @@ def _grade_answer(
         content=decision.feedback,
         score=decision.score,
         outline_index=attempt.cursor_on_plan,
+        rationale=decision.rationale,
     )
 
     if decision.next_action == "finish":

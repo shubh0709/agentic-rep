@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Quiz me &middot; Spaced Repetition Agent{% endblock %}
+{% block content %}
+<section class="dashboard-card interview-me-card">
+  <header class="assessment-hero">
+    <div>
+      <p class="eyebrow">Practice on your terms</p>
+      <h1>Quiz me</h1>
+      <p class="lede">Turn your notes or a trusted source into a focused quiz, an AI interview, or both.</p>
+    </div>
+    <aside class="assessment-hero-note" aria-label="How it works">
+      <strong>What would you like to learn?</strong>
+      <span>Add a topic and at least one source. You’ll choose the exact focus before anything begins.</span>
+    </aside>
+  </header>
+  <div id="interview-me-root" data-state="sources" aria-live="polite"></div>
+</section>
+{% endblock %}
+{% block scripts %}
+<script type="module" src="{{ url_for('web-static', path='/js/interview-me.js') }}?v={{ static_version }}"></script>
+{% endblock %}

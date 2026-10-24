@@ -1,4 +1,5 @@
 from datetime import UTC, date, datetime, timedelta
+from importlib import import_module
 
 import pytest
 from sqlmodel import Session, SQLModel, create_engine, select
@@ -229,3 +230,36 @@ def client(monkeypatch, session):
     app = create_app()
     app.dependency_overrides[get_session] = lambda: session
     return TestClient(app, headers={"Authorization": f"Bearer {credential}"})
+
+
+@pytest.fixture
+def override_entry_extractor(client):
+    """Install a typed ingestion fake through the public FastAPI dependency.
+
+    Keeping this check in the fixture makes route and end-to-end tests fail
+    before issuing a request when the application has not exposed the planned
+    dependency yet. That protects the offline suite from falling through to a
+    real OpenAI call during the red TDD step.
+    """
+    original_overrides = client.app.dependency_overrides.copy()
+
+    def install(extractor):
+        try:
+            module = import_module("sra.agents.entry_extractor")
+        except ModuleNotFoundError:
+            pytest.fail("SRA-1001 requires the public sra.agents.entry_extractor module")
+        dependency = module.get_entry_extractor
+        entries_module = import_module("sra.api.routers.entries")
+        ingest_route = next(
+            route
+            for route in entries_module.router.routes
+            if getattr(route, "path", None) == "/entries/ingest"
+            and "POST" in getattr(route, "methods", set())
+        )
+        if not any(item.call is dependency for item in ingest_route.dependant.dependencies):
+            pytest.fail("POST /entries/ingest must declare get_entry_extractor as a dependency")
+        client.app.dependency_overrides[dependency] = lambda: extractor
+
+    yield install
+    client.app.dependency_overrides.clear()
+    client.app.dependency_overrides.update(original_overrides)

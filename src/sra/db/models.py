@@ -87,6 +87,10 @@ class UserBase(SQLModel):
         default=5,
         sa_column=Column(Integer, nullable=False, server_default="5"),
     )
+    audio_enabled: bool = Field(
+        default=True,
+        sa_column=Column(Boolean, nullable=False, server_default="1"),
+    )
     is_demo_user: bool = False  # SRA-601: marker used by the demo reset job (SRA-603)
 
     @field_validator("preferred_review_time")
@@ -186,6 +190,10 @@ class User(UserBase, table=True):
         CheckConstraint(
             "is_demo_user IN (0, 1)",
             name="ck_users_is_demo_user_boolean",
+        ),
+        CheckConstraint(
+            "audio_enabled IN (0, 1)",
+            name="ck_users_audio_enabled_boolean",
         ),
     )
 
@@ -406,6 +414,7 @@ class InterviewTurnBase(SQLModel):
     content: str
     score: int | None = None
     outline_index: int | None = None
+    rationale: str | None = None
 
 
 class InterviewTurnCreate(InterviewTurnBase):
@@ -606,3 +615,48 @@ class ReferenceMaterial(ReferenceMaterialBase, table=True):
     kind: Literal["url", "paste", "upload"] = Field(
         sa_column=Column(String, nullable=False),
     )
+
+
+class AssessmentSessionBase(SQLModel):
+    """User-selected configuration for one on-demand assessment."""
+
+    topic: str
+    suggestions: list[dict] = Field(default_factory=list, sa_column=Column(JSON, nullable=False))
+    selected_topic_keys: list[str] = Field(default_factory=list, sa_column=Column(JSON, nullable=False))
+    mode: str | None = None
+    mcq_question_count: int = 5
+    interview_question_count: int = 3
+
+
+class AssessmentSessionCreate(AssessmentSessionBase):
+    """Caller-controlled fields; ownership, artifacts, and results are server-owned."""
+
+    model_config = {"extra": "forbid"}
+
+
+class AssessmentSession(AssessmentSessionBase, table=True):
+    __tablename__ = "assessment_sessions"  # pyright: ignore[reportAssignmentType]
+    __table_args__ = (
+        CheckConstraint(
+            "mode IS NULL OR mode IN ('mcq', 'interview', 'both')",
+            name="ck_assessment_sessions_mode",
+        ),
+        CheckConstraint(
+            "mcq_question_count BETWEEN 1 AND 20 AND interview_question_count BETWEEN 3 AND 12",
+            name="ck_assessment_sessions_counts",
+        ),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="users.id", index=True)
+    entry_id: int = Field(foreign_key="study_entries.id", index=True)
+    status: str = Field(default="draft", sa_column=Column(String, nullable=False, server_default="draft"))
+    quiz_set_id: int | None = Field(default=None, foreign_key="quiz_sets.id")
+    interview_plan_id: int | None = Field(default=None, foreign_key="interview_plans.id")
+    mcq_attempt_id: int | None = Field(default=None, foreign_key="quiz_attempts.id")
+    interview_attempt_id: int | None = Field(default=None, foreign_key="quiz_attempts.id")
+    report: dict | None = Field(default=None, sa_column=Column(JSON, nullable=True))
+    report_version: int = Field(default=1, sa_column=Column(Integer, nullable=False, server_default="1"))
+    created_at: datetime = Field(default_factory=_utcnow)
+    updated_at: datetime = Field(default_factory=_utcnow)
+    completed_at: datetime | None = None

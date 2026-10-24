@@ -150,6 +150,7 @@ class MCQState(TypedDict):
     # dashboard can surface "verify dropped N questions" without a separate
     # audit table.
     discarded_for_evidence: NotRequired[list[str]]
+    focus_topics: NotRequired[list[str]]
 
 
 def _get_chat_model() -> ChatOpenAI:
@@ -278,6 +279,7 @@ def _build_messages(
     transcript_slice: str,
     question_count: int,
     option_count: int = 4,
+    focus_topics: list[str] | None = None,
 ) -> tuple[SystemMessage, HumanMessage]:
     """Render the SRA-903 six-section system prompt + a references /
     transcript / metadata human message.
@@ -309,6 +311,8 @@ def _build_messages(
     if entry.tags:
         lines.append(f"  Tags: {', '.join(entry.tags)}")
     lines.append(f"  Summary: {entry.summary}")
+    if focus_topics:
+        lines.append(f"  Required focus topics: {', '.join(focus_topics)}")
     lines.append("")
     lines.append(
         f"Generate exactly {question_count} multiple-choice questions. "
@@ -534,6 +538,7 @@ def generate_questions(state: MCQState) -> dict[str, Any]:
         transcript_slice=transcript_slice,
         question_count=question_count,
         option_count=option_count,
+        focus_topics=state.get("focus_topics"),
     )
 
     try:
@@ -647,6 +652,7 @@ def generate_and_persist_questions(
     session: Any,
     question_count: int,
     option_count: int,
+    focus_topics: list[str] | None = None,
 ) -> QuizSet:
     """
     Build the quiz graph, invoke it with the typed initial state, and
@@ -664,6 +670,7 @@ def generate_and_persist_questions(
         "quiz_set": None,
         "error": None,
         "discarded_for_evidence": [],
+        "focus_topics": list(focus_topics or []),
     }
     result = build_quiz_graph().invoke(initial)
     if result.get("error"):

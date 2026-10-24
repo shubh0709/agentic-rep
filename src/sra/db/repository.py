@@ -14,6 +14,7 @@ from sqlmodel import Session, String, cast, func, or_, select
 from sra.agents.interview_planner import InterviewOutline
 from sra.agents.schemas import MCQDraft
 from sra.db.models import (
+    AssessmentSession,
     InterviewPlan,
     InterviewPlanCreate,
     InterviewTurn,
@@ -33,7 +34,7 @@ from sra.db.models import (
     User,
     _utcnow,
 )
-from sra.db.scheduler import schedule_reviews_for_entry
+from sra.db.scheduler import compute_review_dates, schedule_reviews_for_entry
 
 
 class UserNotFoundError(Exception):
@@ -54,6 +55,7 @@ class UserPreferences(TypedDict):
     quiz_option_count: int
     interview_question_count: int
     interview_target_minutes: int
+    audio_enabled: bool
     wakeup_notification_sent_at: datetime | None
 
 
@@ -76,6 +78,7 @@ def get_user_preferences(user_id: int, session: Session) -> UserPreferences:
         "quiz_option_count": user.quiz_option_count,
         "interview_question_count": user.interview_question_count,
         "interview_target_minutes": user.interview_target_minutes,
+        "audio_enabled": user.audio_enabled,
         "wakeup_notification_sent_at": user.wakeup_notification_sent_at,
     }
 
@@ -110,6 +113,8 @@ def update_user_preferences(
         user.interview_question_count = prefs["interview_question_count"]
     if "interview_target_minutes" in prefs:
         user.interview_target_minutes = prefs["interview_target_minutes"]
+    if "audio_enabled" in prefs:
+        user.audio_enabled = prefs["audio_enabled"]
 
     session.add(user)
     session.commit()
@@ -122,6 +127,7 @@ def update_user_preferences(
         "quiz_option_count": user.quiz_option_count,
         "interview_question_count": user.interview_question_count,
         "interview_target_minutes": user.interview_target_minutes,
+        "audio_enabled": user.audio_enabled,
         "wakeup_notification_sent_at": user.wakeup_notification_sent_at,
     }
 
@@ -148,6 +154,90 @@ def create_entry(*, entry_create: StudyEntryCreate, user_id: int, session: Sessi
     schedule_reviews_for_entry(row.id, row.created_at.date(), session)
 
     return row
+
+
+def update_entry(
+    entry: StudyEntry,
+    *,
+    topic: str | None,
+    created_at: datetime | None,
+    session: Session,
+) -> StudyEntry:
+    """Update an entry and keep pending review dates relative to its capture date."""
+
+    if topic is not None:
+        entry.topic = topic
+    if created_at is not None:
+        entry.created_at = created_at
+        dates = dict(compute_review_dates(created_at.date()))
+        reviews = session.exec(
+            select(ReviewSchedule).where(ReviewSchedule.entry_id == entry.id)
+        ).all()
+        for review in reviews:
+            if review.status == "pending":
+                review.scheduled_date = dates[review.interval_label]
+                session.add(review)
+    session.add(entry)
+    session.commit()
+    session.refresh(entry)
+    return entry
+
+
+def delete_entry_cascade(entry: StudyEntry, session: Session) -> None:
+    """Delete one entry and its complete study/assessment dependency graph."""
+
+    assert entry.id is not None
+    quiz_sets = session.exec(select(QuizSet).where(QuizSet.entry_id == entry.id)).all()
+    quiz_set_ids = [row.id for row in quiz_sets if row.id is not None]
+    attempts = (
+        session.exec(
+            select(QuizAttempt).where(
+                QuizAttempt.quiz_set_id.in_(quiz_set_ids)  # type: ignore[attr-defined]
+            )
+        ).all()
+        if quiz_set_ids else []
+    )
+    attempt_ids = [row.id for row in attempts if row.id is not None]
+
+    for assessment in session.exec(
+        select(AssessmentSession).where(AssessmentSession.entry_id == entry.id)
+    ).all():
+        session.delete(assessment)
+    if attempt_ids:
+        for answer in session.exec(
+            select(QuizAnswer).where(
+                QuizAnswer.attempt_id.in_(attempt_ids)  # type: ignore[attr-defined]
+            )
+        ).all():
+            session.delete(answer)
+        for turn in session.exec(
+            select(InterviewTurn).where(
+                InterviewTurn.attempt_id.in_(attempt_ids)  # type: ignore[attr-defined]
+            )
+        ).all():
+            session.delete(turn)
+    for attempt in attempts:
+        session.delete(attempt)
+    for quiz_set in quiz_sets:
+        for question in session.exec(
+            select(QuizQuestion).where(QuizQuestion.quiz_set_id == quiz_set.id)
+        ).all():
+            session.delete(question)
+        for plan in session.exec(
+            select(InterviewPlan).where(InterviewPlan.quiz_set_id == quiz_set.id)
+        ).all():
+            session.delete(plan)
+        session.delete(quiz_set)
+    for review in session.exec(
+        select(ReviewSchedule).where(ReviewSchedule.entry_id == entry.id)
+    ).all():
+        session.delete(review)
+    for reference in session.exec(
+        select(ReferenceMaterial).where(ReferenceMaterial.entry_id == entry.id)
+    ).all():
+        session.delete(reference)
+    session.delete(entry)
+    session.commit()
 
 
 def add_reference(
@@ -895,6 +985,7 @@ def append_interview_turn(
     content: str,
     score: int | None = None,
     outline_index: int | None = None,
+    rationale: str | None = None,
     session: Session,
 ) -> InterviewTurn:
     """Append one ``InterviewTurn`` row for ``attempt`` and return the persisted row.
@@ -921,6 +1012,7 @@ def append_interview_turn(
             content=stripped,
             score=score,
             outline_index=outline_index,
+            rationale=rationale,
         )
     )
     session.add(turn)
@@ -1066,6 +1158,14 @@ def delete_user_cascade(user: User, session: Session) -> None:
         raise UserNotFoundError(f"user {getattr(user, 'id', None)!r} is not present in this session")
 
     user_id = user.id
+
+    # Assessment sessions point at entries, quiz sets, plans, and attempts;
+    # remove the parent orchestration records before their child artifacts.
+    for assessment in session.exec(
+        select(AssessmentSession).where(AssessmentSession.user_id == user_id)
+    ).all():
+        session.delete(assessment)
+    session.flush()
 
     # quiz_answers must die before quiz_attempts because the FK on
     # quiz_answers.attempt_id does not declare ondelete="CASCADE" in this

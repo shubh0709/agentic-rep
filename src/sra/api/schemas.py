@@ -6,7 +6,7 @@ from datetime import date, datetime
 from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator, model_validator
 
 from sra.db.models import (
     MAX_INTERVIEW_QUESTION_COUNT,
@@ -32,6 +32,31 @@ class EntryOut(BaseModel):
     summary: str
     raw_transcript: str
     created_at: datetime
+
+
+class EntryUpdateRequest(BaseModel):
+    """Fields the Library editor may change on an existing study note."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    topic: str | None = None
+    created_at: datetime | None = None
+
+    @field_validator("topic")
+    @classmethod
+    def _strip_topic(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("topic must not be empty")
+        return stripped
+
+    @model_validator(mode="after")
+    def _require_change(self) -> "EntryUpdateRequest":
+        if self.topic is None and self.created_at is None:
+            raise ValueError("at least one editable field is required")
+        return self
 
 
 class ReviewOut(BaseModel):
@@ -148,6 +173,7 @@ class PreferencesIn(BaseModel):
     quiz_option_count: int
     interview_question_count: int | None = None
     interview_target_minutes: int | None = None
+    audio_enabled: StrictBool = True
     wakeup_notification_sent_at: datetime | None = None
 
     @field_validator("preferred_review_time")
@@ -227,6 +253,7 @@ class PreferencesOut(BaseModel):
     quiz_option_count: int
     interview_question_count: int
     interview_target_minutes: int
+    audio_enabled: bool
     wakeup_notification_sent_at: datetime | None
 
 
@@ -262,6 +289,7 @@ class InterviewTurnOut(BaseModel):
     content: str
     score: int | None = None
     outline_index: int | None = None
+    rationale: str | None = None
     created_at: datetime
 
 
@@ -544,3 +572,32 @@ class TopicRegenerateResult(BaseModel):
     quiz_set_id: int | None = None
     interview_plan_id: int | None = None
     generation_errors: list[str] = Field(default_factory=list)
+
+
+class AssessmentAnalyzeRequest(TopicCreate):
+    """Reference bundle used to prepare an on-demand assessment draft."""
+
+
+class AssessmentGenerateRequest(BaseModel):
+    """User-approved topics and per-session settings."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    selected_topic_keys: list[str] = Field(min_length=1, max_length=12)
+    mode: Literal["mcq", "interview", "both"]
+    mcq_question_count: int = Field(default=5, ge=1, le=MAX_QUESTION_COUNT)
+    interview_question_count: int = Field(
+        default=3,
+        ge=MIN_INTERVIEW_QUESTION_COUNT,
+        le=MAX_INTERVIEW_QUESTION_COUNT,
+    )
+
+    @field_validator("selected_topic_keys")
+    @classmethod
+    def _unique_non_empty_topic_keys(cls, values: list[str]) -> list[str]:
+        stripped = [value.strip() for value in values]
+        if any(not value for value in stripped):
+            raise ValueError("selected topic keys must not be empty")
+        if len(set(stripped)) != len(stripped):
+            raise ValueError("selected topic keys must be unique")
+        return stripped
