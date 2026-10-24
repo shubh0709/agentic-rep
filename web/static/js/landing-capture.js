@@ -34,15 +34,15 @@
     window.SpeechRecognition || window.webkitSpeechRecognition || null;
   let recognizer = null;
   let recognizing = false;
+  let recordingBaseline = "";
   let interimBuffer = "";
   let finalBuffer = "";
-  // Track the last result index we have already committed as final, plus the
-  // transcript of that result. The Web Speech API may re-deliver an existing
-  // final result in a later onresult event (and a new segment's first interim
-  // can briefly echo the prior segment's finalized text); both would otherwise
-  // duplicate locked-in words in the live transcript.
+  // Track the last result index we have already committed as final. The Web
+  // Speech API may re-deliver an existing final result in a later onresult event
+  // (and a new segment's first interim can briefly echo the prior segment's
+  // finalized text); both would otherwise duplicate locked-in words in the live
+  // transcript.
   let lastFinalIndex = -1;
-  let lastFinalTranscript = "";
 
   function setRecordLabel(state) {
     if (!recordLabel) return;
@@ -65,7 +65,7 @@
   }
 
   function getBaselineText() {
-    const value = textarea.value;
+    const value = recordingBaseline;
     if (!value) return "";
     return value.endsWith(" ") || value === "" ? value : value + " ";
   }
@@ -118,12 +118,10 @@
           // Nothing new to commit; still record this result index so a
           // later re-delivery of the same final does not slip through.
           lastFinalIndex = i;
-          lastFinalTranscript = transcript;
           continue;
         }
         finalBuffer = finalBuffer + delta + " ";
         lastFinalIndex = i;
-        lastFinalTranscript = transcript;
       }
       // The live "what's being recognized now" text is the most recent
       // non-final result, with any overlap against the already-finalized
@@ -156,12 +154,12 @@
       recognizing = false;
       interimBuffer = "";
       finalBuffer = "";
+      recordingBaseline = "";
       if (recordBtn) recordBtn.setAttribute("aria-pressed", "false");
       if (recordBtn && !recordBtn.disabled) setRecordLabel("idle");
       if (statusEl && statusEl.textContent.startsWith("Listening.")) {
         setStatus("Recording stopped. Review or edit your transcript, then capture it.", "");
       }
-      renderTranscript();
     };
 
     return instance;
@@ -185,10 +183,13 @@
     if (recognizing) return;
     recognizer = recognizer || buildRecognizer();
     if (!recognizer) return;
+    // Keep the text that existed before this recording stable. Reading the
+    // textarea again from renderTranscript() would feed the previous live
+    // render back into the next speech event and duplicate recognized words.
+    recordingBaseline = textarea.value;
     finalBuffer = "";
     interimBuffer = "";
     lastFinalIndex = -1;
-    lastFinalTranscript = "";
     try {
       recognizer.start();
       recognizing = true;
