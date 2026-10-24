@@ -38,6 +38,9 @@ Sign in at `/api/v1/auth/google/login` first — anonymous requests get `401`; d
 | Phase 7 | Study dashboard: entries, search, timeline |
 | Phase 8 | Interactive AI interview mode |
 | Phase 9 | [Topic authoring + question-quality uplift](tickets/README.md#phase-9--topic-authoring-with-reference-materials--question-quality-uplift) |
+| Phase 10 | Explicit model boundaries and boundary-first tests |
+| Phase 11 | On-demand MCQ and AI interview assessments |
+| Phase 12 | Calm Today workspace, daily inspiration, subtle motion, and optional website voice |
 
 Phase status, scope changes, and verification results are owned by [`PROGRESS.md`](PROGRESS.md),
 the source of truth. Ticket inventory and phase → ticket map:

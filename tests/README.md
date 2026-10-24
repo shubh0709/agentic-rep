@@ -82,6 +82,43 @@ That phase's red-to-green order was: user model plus a rehearsed migration again
 
 Later phases keep focused commands in their own tickets; see [`tickets/README.md`](../tickets/README.md) for the per-ticket index.
 
+Phase 11 on-demand assessments:
+
+```bash
+pytest tests/unit/test_assessment_contracts.py tests/e2e/test_phase11_interview_me_e2e.py -q
+pytest tests/integration/test_route_policy_audit.py tests/integration/test_init_db.py -q
+node --check web/static/js/interview-me.js
+```
+
+The Phase 11 e2e test keeps FastAPI, authentication, SQLModel, repositories,
+MCQ answer routes, interview turns, combined-session persistence, and report
+reads real. It substitutes only model inference; pasted text avoids network
+fetching. A real browser and live model remain manual/opt-in evidence.
+
+Phase 12 calm daily experience:
+
+```bash
+pytest tests/unit/test_daily_inspiration.py tests/unit/test_user_preferences.py tests/unit/test_preferences_routes.py -q
+pytest tests/unit/test_library_model.py tests/unit/test_dashboard_phase9_js.py tests/integration/test_web_pages.py -q
+SRA_RUN_PLAYWRIGHT_TESTS=1 pytest tests/playwright/test_user_flows.py -q
+node --check web/static/js/ambient-voice.js
+node --check web/static/js/library-model.js
+```
+
+SRA-1204 assessment and timezone UI:
+
+```bash
+pytest tests/unit/test_assessment_contracts.py tests/integration/test_web_pages.py -q
+SRA_RUN_PLAYWRIGHT_TESTS=1 pytest tests/playwright/test_user_flows.py -q
+node --check web/static/js/interview-me.js
+node --check web/static/js/settings.js
+```
+
+The browser suite keeps the rendered application and preference round trip real
+while replacing browser speech output. It proves utterance text, deduplication,
+cancellation, unavailable-speech recovery, and shared completion events; it does
+not prove the sound or autoplay behavior of an installed browser voice.
+
 ## Red → green → refactor
 
 1. Read the failing assertion and the relevant function's docstring.
@@ -135,6 +172,25 @@ The fixture command also covers quieter audio (20% amplitude), deterministic low
 | Automated end to end | Text client → API/storage, or terminal → recorder/WAV → transcription → pipeline/client → FastAPI → graph → repository → SQLite → scheduler → search/digest | In-process HTTP transport, deterministic inference, controlled PCM/input/clock |
 | Whisper integration | Real spoken WAV, transcription wrapper, local Whisper model | None; opt-in because packages/weights are needed |
 | Desktop acceptance | Actual hotkey, microphone, macOS UI, Whisper, running API, model provider | None; manual steps in SRA-204/205/206 |
+
+### Boundary-first test doubles
+
+Replace only process-external or nondeterministic boundaries: model providers,
+remote HTTP services, hardware, OS UI, and clocks. Expose those substitutions as
+typed protocols, callable parameters, or FastAPI dependencies and use small
+handwritten fakes that return application values. Do not patch a private helper
+inside application code merely to reach its collaborator.
+
+Keep in-process behavior real whenever practical. For example, ingestion tests
+provide an `EntryExtractor` fake but still execute the real route, LangGraph,
+repository, SQLite transaction, review scheduler, and response mapping. Assert
+the resulting state, rows, IDs, and responses. Use call-count assertions only
+when whether work occurred is itself the contract, such as authentication or
+rate limiting stopping inference before side effects.
+
+Every production adapter still needs its own focused contract test, and a fake
+does not count as evidence that the real provider works. Use the opt-in suites
+for real model, audio, browser, or hardware evidence.
 
 The end-to-end tests do not mock `process_recording`, `transcribe`, `ingest_transcript`, routes, repositories, or scheduling. They verify returned IDs against stored rows and search, original transcript and local-user ownership, six pending review dates per entry, and the next-day digest. They advance the digest's clock without changing stored schedules. They also test silence, late decoding failure, server rejection/recovery, and a response lost **after** saving (the client must report uncertainty and never automatically resubmit). Terminal end-to-end tests run the real recorder and CLI, checking PCM/WAV handoff, saved IDs, silence, cancellation, and cleanup after a lost response.
 

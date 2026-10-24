@@ -157,7 +157,7 @@ def live_server(monkeypatch, tmp_path):
     from sra.agents import interview_conversation_graph as _icg
     from sra.agents import interview_planner as _ip
     from sra.agents import quiz_graph as _qg
-    from sra.agents.schemas import MCQDraft, StudyEntryDraft, StudyEntryDrafts
+    from sra.agents.schemas import MCQDraft, StudyEntryDraft
     from sra.db.repository import create_quiz_set
 
     def _fake_gap(entry, user_id, session, question_count=10, option_count=4):  # noqa: ARG001
@@ -197,39 +197,27 @@ def live_server(monkeypatch, tmp_path):
             ]
         )
 
-    class _FakeExtractionModel:
-        """Deterministic stand-in for the chat model the ingestion graph uses.
+    class _FakeEntryExtractor:
+        """Deterministic stand-in for the external ingestion boundary.
 
         Returns one draft per transcript so the route can produce a saved
         StudyEntry + ReviewSchedule without contacting OpenAI.
         """
 
-        def with_structured_output(self, schema, **kwargs):  # noqa: ARG002
-            assert schema is StudyEntryDrafts
-            return self
-
-        def invoke(self, messages):  # noqa: ARG002
-            text = ""
-            for message in messages:
-                content = message[1] if isinstance(message, tuple) else getattr(message, "content", None)
-                if isinstance(content, str):
-                    text += content
+        def extract(self, transcript):
+            text = transcript
             topic_word = "Study Note"
             lowered = text.lower()
             if "mitosis" in lowered:
                 topic_word = "Mitosis"
             elif "photo" in lowered:
                 topic_word = "Photosynthesis"
-            return StudyEntryDrafts(
-                drafts=[
-                    StudyEntryDraft(
-                        topic=topic_word,
-                        subtopic="Web capture",
-                        tags=["web"],
-                        summary=text[:200] or "Captured from the landing page.",
-                    )
-                ]
-            )
+            return [StudyEntryDraft(
+                topic=topic_word,
+                subtopic="Web capture",
+                tags=["web"],
+                summary=text[:200] or "Captured from the landing page.",
+            )]
 
     class _FakeInterviewModel:
         """Finish a browser-driven interview after one deterministic answer."""
@@ -252,7 +240,6 @@ def live_server(monkeypatch, tmp_path):
     monkeypatch.setattr(_ip, "generate_interview_outline", _fake_outline)
     _ip.generate_interview_outline = _fake_outline  # noqa: SLF001 (parity for direct callers)
     monkeypatch.setattr(_icg, "_get_chat_model", lambda: _FakeInterviewModel())
-    monkeypatch.setattr("sra.agents.ingestion_graph._get_chat_model", lambda: _FakeExtractionModel())
 
     user_id_holder: dict[str, int] = {}
 
@@ -269,6 +256,9 @@ def live_server(monkeypatch, tmp_path):
         user_id_holder["id"] = user.id
 
     app = create_app()
+    from sra.agents.entry_extractor import get_entry_extractor
+
+    app.dependency_overrides[get_entry_extractor] = _FakeEntryExtractor
     # After create_app runs, the lifespan may have re-cached the engine;
     # clear it again so the TestClient's get_session and live_server["engine"]
     # point to the same SQLAlchemy URL.

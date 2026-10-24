@@ -9,8 +9,10 @@ JavaScript on the quiz and settings pages calls the API with
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, available_timezones
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -24,9 +26,10 @@ from sra.auth.dependencies import get_current_user
 from sra.config import Settings, get_settings
 from sra.db.models import User
 from sra.db.repository import UserNotFoundError, get_user_preferences
+from web.inspiration import get_daily_inspiration
 
 WEB_DIR = Path(__file__).resolve().parent
-STATIC_VERSION = "20261024"
+STATIC_VERSION = "20261024-landing-wide"
 
 router = APIRouter(tags=["web"], include_in_schema=False)
 templates = Jinja2Templates(directory=str(WEB_DIR / "templates"))
@@ -141,10 +144,26 @@ def dashboard_page(request: Request, user: User = Depends(require_user)) -> HTML
     ``/api/v1/digest``, and ``/api/v1/reviews/upcoming`` so the page itself
     stays a thin shell that requires no server-side data fetching.
     """
+    local_day = datetime.now(UTC).astimezone(ZoneInfo(user.timezone)).date()
     return templates.TemplateResponse(
         request,
         "dashboard.html",
-        {"current_user": user, "active_nav": "dashboard"},
+        {
+            "current_user": user,
+            "active_nav": "dashboard",
+            "daily_inspiration": get_daily_inspiration(local_day),
+            "local_day": local_day.isoformat(),
+        },
+    )
+
+
+@router.get("/interview-me", response_class=HTMLResponse, dependencies=[Depends(limit_authenticated)])
+def interview_me_page(request: Request, user: User = Depends(require_user)) -> HTMLResponse:
+    """Protected on-demand assessment wizard and history surface."""
+    return templates.TemplateResponse(
+        request,
+        "interview_me.html",
+        {"current_user": user, "active_nav": "interview_me"},
     )
 
 
@@ -188,6 +207,10 @@ def settings_page(
         prefs = get_user_preferences(user.id, session)
     except UserNotFoundError as exc:
         raise HTTPException(status_code=404, detail="User not found") from exc
+    timezone_options = sorted(
+        available_timezones(),
+        key=lambda zone: (zone != "UTC", zone),
+    )
     return templates.TemplateResponse(
         request,
         "settings.html",
@@ -199,10 +222,12 @@ def settings_page(
                 "timezone": prefs["timezone"],
                 "quiz_question_count": prefs["quiz_question_count"],
                 "quiz_option_count": prefs["quiz_option_count"],
+                "audio_enabled": prefs["audio_enabled"],
                 "wakeup_notification_sent_at": prefs["wakeup_notification_sent_at"],
             },
             "max_question_count": 10,
             "max_option_count": 6,
+            "timezone_options": timezone_options,
         },
     )
 

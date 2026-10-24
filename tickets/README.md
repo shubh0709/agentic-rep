@@ -20,7 +20,10 @@ ticket.
 | 6 — Open-source packaging | [Dockerfile/compose profiles, demo mode + reset job, self-host docs](../README.md#build-phases) | SRA-601 – SRA-605 |
 | 7 — Study dashboard | [Entries, search, upcoming-reviews timeline on `/dashboard`](../README.md#build-phases) | SRA-701 |
 | 8 — Interactive AI interview | [Schema, planner, conversation graph, repo helpers, routes, DTOs, browser + voice clients](../README.md#build-phases) | SRA-801 – SRA-809 |
-| 9 — Topic authoring + question quality | [`reference_materials`, `POST /topics`, six-section rubric + verifier](../README.md#build-phases) | SRA-901 – SRA-909 |
+| 9 — Topic authoring + question quality | [`reference_materials`, `POST /topics`, six-section rubric + verifier](../README.md#build-phases) | SRA-901 – SRA-910 |
+| 10 — Test architecture | Explicit external ports, handwritten fakes, real in-process integration | SRA-1001 |
+| 11 — On-demand assessments | Instant source-grounded MCQ/interview sessions and saved reports | SRA-1101 |
+| 12 — Calm experience and motivation | Cohesive Today workspace, daily inspiration, browser voice, and a topic-centered library | SRA-1201–1204 |
 
 Phase status is owned by [`PROGRESS.md`](../PROGRESS.md), the source of truth for what is done
 and what is next; each ticket file's own `Status:` field holds the finer detail.
@@ -127,6 +130,28 @@ and what is next; each ticket file's own `Status:` field holds the finer detail.
 | [SRA-907](SRA-907-startup-quiz-pregeneration-catch-up.md) | Catch up quiz pre-generation when the API starts | Runs the pregen job once at scheduler startup |
 | [SRA-908](SRA-908-transcript-grounded-quiz-verification.md) | Verify quizzes generated from captured transcripts | Transcript backs verification when no references exist |
 | [SRA-909](SRA-909-collapse-repeated-transcription-spans.md) | Collapse repeated spans in local transcription | Drops Whisper's repeated adjacent spans from the transcript |
+| [SRA-910](SRA-910-browser-dictation-transcript-deduplication.md) | Keep browser dictation transcript segments single | Prevents live Web Speech renders from feeding back into and duplicating the textarea |
+
+## Phase 10 — Test architecture
+
+| Ticket | Title | What it adds |
+|---|---|---|
+| [SRA-1001](SRA-1001-explicit-ingestion-extractor-boundary.md) | Explicit ingestion extractor boundary | Replaces private model-construction patches with a typed external port and dependency-injected fakes |
+
+## Phase 11 — On-demand assessments
+
+| Ticket | Title | What it adds |
+|---|---|---|
+| [SRA-1101](SRA-1101-instant-interview-me-assessments.md) | Instant “Interview Me” assessments | Reference analysis, topic selection, per-session MCQ/interview configuration, resume, history, and saved reports |
+
+## Phase 12 — Calm experience and motivation
+
+| Ticket | Title | What it adds |
+|---|---|---|
+| [SRA-1201](SRA-1201-calm-daily-study-experience.md) | Calm daily study experience | Today-first workspace, daily quote with meaning, lightweight motion, and optional browser voice moments |
+| [SRA-1202](SRA-1202-calm-topic-shelf.md) | Calm topic shelf and review horizon | Exact topic grouping, scroll-snap cards, note drawers, search/filter/sort, and deduplicated schedule context |
+| [SRA-1203](SRA-1203-topic-card-crud-and-direct-quiz.md) | Topic-card CRUD and direct quiz launch | Click-to-edit cards, owner-scoped update/delete, direct topic quizzes, and roomier sections |
+| [SRA-1204](SRA-1204-assessment-and-timezone-ui.md) | Polished assessment and timezone selection UI | Responsive Quiz me workspace and selectable supported IANA timezones |
 
 ## Self-heal tickets
 

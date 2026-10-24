@@ -14,10 +14,20 @@ The single source of truth for **phase status — what is done and what is next*
 | 6 — Open-source packaging | Docker/compose, demo mode, self-host docs | Closed 2026-10-14 | `POST /admin/demo/reset` gated on `DEMO_MODE` |
 | 7 — Study dashboard | Entries, search, upcoming reviews | SRA-701 done 2026-10-15 | `dev_mode` + `POST /me/dev/pregenerate-now` |
 | 8 — AI interview mode | Schema, planner, graph, routes, clients | SRA-801–808 done 2026-10-15; **809 not done** | SRA-802 circular import blocks one e2e |
-| 9 — Topic authoring + quality | `reference_materials`, `POST /topics`, rubric | SRA-901, 906–909 done; **902–905 open** | Green after SRA-906: 1232 passed, 29 skipped |
+| 9 — Topic authoring + quality | `reference_materials`, `POST /topics`, rubric | SRA-901, 906–910 done; **902–905 open** | Browser dictation deduplication verified in Chromium |
+| 10 — Test architecture | Explicit external ports and boundary-first tests | **SRA-1001 implemented 2026-10-24** | 1234 passed, 35 skipped; opt-in live checks pending |
+| 11 — On-demand assessments | Instant source-grounded MCQ/interview sessions | **SRA-1101 implemented 2026-10-24** | 1246 passed, 36 skipped; live-model/browser acceptance pending |
+| 12 — Calm experience | Today workspace, voice, topic shelf, review horizon | **SRA-1201–1204 implemented 2026-10-24** | Assessment/settings polish and topic CRUD verified; real speech acceptance pending |
 
 ## Changelog
 
+- **2026-10-24** — [SRA-1204](tickets/SRA-1204-assessment-and-timezone-ui.md) — responsive “Quiz me” source/history workspace, associated form labels, and a Settings select populated from supported IANA timezones; focused **25 passed**, Chromium **34 passed**, Ruff/Pyright clean.
+- **2026-10-24** — [SRA-1203](tickets/SRA-1203-topic-card-crud-and-direct-quiz.md) — roomier Today sections, clickable edit/delete cards, owner-scoped entry CRUD with review rescheduling and dependent cleanup, direct per-topic `Quiz me`, and renamed assessment labels; focused + audit **12 passed**, non-conflicting suite **1269 passed, 48 skipped**, Ruff/Pyright clean.
+- **2026-10-24** — [SRA-1202](tickets/SRA-1202-calm-topic-shelf.md) — exact-name topic grouping, native scroll-snap shelf, nested note access, local search/filter/sort, deduplicated review-date chips, and a unique-topic Review Horizon; **1262 passed, 46 skipped**, **33 Chromium flows**, Ruff/Pyright clean.
+- **2026-10-24** — [SRA-1201](tickets/SRA-1201-calm-daily-study-experience.md) — calm Today-first workspace, deterministic daily quote with explanation, persisted website-audio setting, shared named welcome/completion voice layer, and reduced-motion-safe transitions; **1254 passed, 42 skipped**, **29 Chromium flows**, Ruff/Pyright clean.
+- **2026-10-24** — [SRA-1101](tickets/SRA-1101-instant-interview-me-assessments.md) — **Interview Me** wizard, source-grounded topic selection, per-session MCQ/interview/both settings, resumable attempts, owner-scoped history, persisted rationale, and cached structured reports; **1246 passed, 36 skipped**, Ruff/Pyright clean.
+- **2026-10-24** — [SRA-910](tickets/SRA-910-browser-dictation-transcript-deduplication.md) — browser dictation now renders every recognition event from one session baseline instead of feeding the textarea back into itself; full browser flows **23 passed**.
+- **2026-10-24** — [SRA-1001](tickets/SRA-1001-explicit-ingestion-extractor-boundary.md) — ingestion now composes through a typed `EntryExtractor`; tests inject handwritten fakes instead of patching a private model helper; **1234 passed, 35 skipped**, Ruff/Pyright clean.
 - **2026-10-17** — [SRA-906](tickets/SRA-906-dashboard-ui-recovery.md) — dashboard UI recovery; suite green at **1232 passed, 29 skipped**, Ruff/Pyright clean.
 - **2026-10-16** — Self-heal ([report](tickets/self_heal/SH-REPORT.md)) — four defects + route-audit gap closed (SH-002…005; `d6f080a`, `6938f95`, `2d33a4e`); 962→**970 passed**, 25→**17 failed**, Pyright 16→4.
 - **2026-10-16** — [SRA-901](tickets/SRA-901-reference-materials-and-ingestion-route.md) — reference-materials schema, fetcher, extractor, ingestion route; **84/84** tests pass.
@@ -57,6 +67,7 @@ The single source of truth for **phase status — what is done and what is next*
 - **Phase 9 in progress** — SRA-902/903/904/905 open ([Phase 9 plan](docs/plans/2026-10-16-phase9-topic-authoring-and-quality.md)).
 - **Pre-existing SRA-802 circular import** — `repository.py → interview_planner.py → quiz_graph.py → repository.py` blocks `tests/e2e/test_phase4_web_quiz_e2e.py` ([SRA-803](tickets/SRA-803-interview-conversation-graph.md)).
 - **Dashboard JS tests need test-only hooks** — Node driver needed a `setImmediate` DOM dump, `auto_advance`, and an `appendChild` shim ([SRA-405](tickets/SRA-405-dashboard-quiz-ui.md), [SRA-807](tickets/SRA-807-interview-dashboard-ui.md)).
+- **Website voice needs real-browser listening acceptance** — Chromium automation replaces speech synthesis with a deterministic fake; actual installed voices, sound output, and browser autoplay policy still require Chrome/Safari checks ([SRA-1201](tickets/SRA-1201-calm-daily-study-experience.md)).
 - **Default-suite state** — green as of 2026-10-17; the 17 failures classified on 2026-10-16 were repaired by Phase 9.
 
 ## Reference

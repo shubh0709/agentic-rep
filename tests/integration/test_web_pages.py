@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 
 def test_landing_renders_for_anonymous(client):
     response = client.get("/")
@@ -9,7 +11,7 @@ def test_landing_renders_for_anonymous(client):
     assert "text/html" in response.headers["content-type"]
     body = response.text
     assert "Spaced Repetition Agent" in body
-    assert "Remember what you learn" in body
+    assert "Remember it for good" in body
 
 
 def test_signin_page_renders(monkeypatch, session):
@@ -76,6 +78,28 @@ def test_settings_page_renders_with_current_values(client):
     assert "UTC" in body
 
 
+def test_settings_timezone_is_required_select_with_supported_iana_choices(
+    client, seeded_user
+):
+    """SRA-1204: users choose a supported zone instead of typing an identifier."""
+    seeded_user.timezone = "Asia/Kolkata"
+    response = client.get("/settings")
+
+    assert response.status_code == 200
+    timezone_control = re.search(
+        r'<select[^>]*id="timezone"[^>]*>(.*?)</select>',
+        response.text,
+        flags=re.DOTALL,
+    )
+    assert timezone_control is not None
+    opening_tag = response.text[timezone_control.start() : timezone_control.start(1)]
+    assert "required" in opening_tag
+    options = timezone_control.group(1)
+    assert 'value="UTC"' in options
+    assert 'value="Asia/Kolkata" selected' in options
+    assert 'value="America/New_York"' in options
+
+
 def test_dashboard_page_requires_auth(monkeypatch, session):
     """Without a session cookie the dashboard page must 401."""
     from fastapi.testclient import TestClient
@@ -101,7 +125,8 @@ def test_dashboard_page_renders_for_authenticated_user(client):
     response = client.get("/dashboard")
     assert response.status_code == 200
     body = response.text
-    assert "Study dashboard" in body
+    assert ">Today<" in body
+    assert 'data-panel="daily-inspiration"' in body
     assert 'id="entries-root"' in body
     assert 'id="upcoming-root"' in body
     assert 'id="entry-search"' in body
