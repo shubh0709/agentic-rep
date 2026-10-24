@@ -1,15 +1,27 @@
 {% extends "base.html" %}
-{% block title %}Dashboard &middot; Spaced Repetition Agent{% endblock %}
+{% block title %}Today &middot; Spaced Repetition Agent{% endblock %}
 {% block content %}
 <section class="dashboard-card">
-  <header class="dashboard-header">
+  <header class="dashboard-header today-header">
     <div>
-      <h1>Study dashboard</h1>
-      <p class="lede muted">
-        Browse every study entry you've captured, search by topic or tag, and see what's coming up for review.
-      </p>
+      <p class="eyebrow">Your daily practice</p>
+      <h1>Today</h1>
+      <p class="daily-greeting" data-field="daily-greeting">Hello, {{ current_user.display_name }}. Let&rsquo;s make a little space for what matters.</p>
     </div>
+    <a class="button primary start-review" href="/quiz" data-action="start-review">
+      Start today&rsquo;s review <span aria-hidden="true">&rarr;</span>
+    </a>
   </header>
+
+  <article class="daily-inspiration" data-panel="daily-inspiration" data-local-day="{{ local_day }}">
+    <span class="inspiration-orbit" aria-hidden="true"></span>
+    <div>
+      <p class="eyebrow">A thought for today</p>
+      <blockquote data-field="quote">&ldquo;{{ daily_inspiration.quote }}&rdquo;</blockquote>
+      <p class="inspiration-attribution" data-field="attribution">&mdash; {{ daily_inspiration.attribution }}</p>
+      <p class="inspiration-meaning" data-field="meaning">{{ daily_inspiration.meaning }}</p>
+    </div>
+  </article>
 
   <div class="stats-row" aria-label="At a glance">
     <article class="stat-tile" data-stat="entries">
@@ -28,8 +40,9 @@
 
   <section class="dashboard-section" aria-labelledby="entries-heading">
     <header class="section-header">
-      <h2 id="entries-heading">Entries</h2>
+      <div><p class="eyebrow">Your knowledge</p><h2 id="entries-heading">Library</h2></div>
       <div class="section-actions">
+        <a class="button primary" href="/interview-me">Quiz me</a>
         <button
           type="button"
           class="button primary"
@@ -37,25 +50,39 @@
           aria-haspopup="dialog"
           aria-controls="create-topic-modal"
         >Create topic</button>
-        <label class="search-field">
-          <span class="visually-hidden">Search entries</span>
-          <input
-            type="search"
-            id="entry-search"
-            placeholder="Search topic, subtopic, tag, or summary"
-            autocomplete="off"
-            spellcheck="false"
-          >
-        </label>
       </div>
     </header>
+    <div class="library-toolbar" aria-label="Filter and sort your knowledge">
+      <label class="library-search search-field">
+        <span class="visually-hidden">Search topics and notes</span>
+        <input type="search" id="entry-search" placeholder="Search topics, notes, or tags" autocomplete="off" spellcheck="false">
+      </label>
+      <div class="filter-chips" role="group" aria-label="Review timing">
+        <button type="button" class="filter-chip is-active" data-filter="all" aria-pressed="true">All</button>
+        <button type="button" class="filter-chip" data-filter="ready" aria-pressed="false">Ready now</button>
+        <button type="button" class="filter-chip" data-filter="next7" aria-pressed="false">Next 7 days</button>
+        <button type="button" class="filter-chip" data-filter="none" aria-pressed="false">No upcoming</button>
+      </div>
+      <label class="topic-sort-field">Sort
+        <select id="topic-sort">
+          <option value="next">Next review</option>
+          <option value="recent">Recently captured</option>
+          <option value="az">A–Z</option>
+        </select>
+      </label>
+    </div>
     <p class="lede muted" id="entries-status" role="status" aria-live="polite">Loading entries&hellip;</p>
-    <div id="entries-root" data-state="loading"></div>
+    <div class="topic-shelf-shell">
+      <button type="button" class="shelf-arrow" data-action="shelf-prev" aria-label="Previous topic" disabled>&larr;</button>
+      <div id="entries-root" data-panel="topic-shelf" data-state="loading" tabindex="0" aria-label="Topic shelf"></div>
+      <button type="button" class="shelf-arrow" data-action="shelf-next" aria-label="Next topic" disabled>&rarr;</button>
+    </div>
+    <p class="shelf-position muted" data-shelf-position role="status" aria-live="polite">0 of 0</p>
   </section>
 
   <section class="dashboard-section" aria-labelledby="upcoming-heading">
     <header class="section-header">
-      <h2 id="upcoming-heading">Upcoming reviews</h2>
+      <div><p class="eyebrow">Your rhythm</p><h2 id="upcoming-heading">Review horizon</h2></div>
       <p class="muted">
         <label class="search-field">
           <span class="visually-hidden">Days ahead</span>
@@ -69,10 +96,11 @@
       </p>
     </header>
     <p class="lede muted" id="upcoming-status" role="status" aria-live="polite">Loading upcoming reviews&hellip;</p>
-    <div id="upcoming-root" data-state="loading"></div>
+    <div id="upcoming-root" class="review-horizon" data-state="loading"></div>
   </section>
 </section>
 {% endblock %}
 {% block scripts %}
+<script src="{{ url_for('web-static', path='/js/library-model.js') }}?v={{ static_version }}"></script>
 <script type="module" src="{{ url_for('web-static', path='/js/dashboard.js') }}?v={{ static_version }}"></script>
 {% endblock %}

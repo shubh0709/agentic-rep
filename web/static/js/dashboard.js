@@ -15,6 +15,7 @@
   const DIGEST_API = "/api/v1/digest";
   const UPCOMING_API = "/api/v1/reviews/upcoming";
   const TOPICS_API = "/api/v1/topics";
+  const QUIZ_API = "/api/v1/quiz";
 
   const entriesStatus = document.getElementById("entries-status");
   const upcomingStatus = document.getElementById("upcoming-status");
@@ -29,15 +30,17 @@
 
   if (!entriesRoot || !upcomingRoot) return;
 
-  // Debounce input so each keystroke doesn't fire a request -- wait until the
-  // user pauses typing for ~200ms before hitting the search endpoint.
-  function debounce(fn, wait) {
-    let timer = null;
-    return function debounced(...args) {
-      if (timer !== null) clearTimeout(timer);
-      timer = setTimeout(() => fn.apply(null, args), wait);
-    };
-  }
+  const model = window.sraLibraryModel;
+  if (!model) return;
+  const shelfPrev = document.querySelector('[data-action="shelf-prev"]');
+  const shelfNext = document.querySelector('[data-action="shelf-next"]');
+  const shelfPosition = document.querySelector("[data-shelf-position]");
+  const topicSort = document.getElementById("topic-sort");
+  const state = {
+    entries: [], due: [], upcoming: [], groups: [], visible: [],
+    query: "", filter: "all", sort: "next", index: 0,
+    generationResults: new Map(), quizSets: [],
+  };
 
   async function jsonFetch(url, init) {
     return window.sraJsonFetch(url, init);
@@ -121,190 +124,275 @@
     return new Date().toISOString().slice(0, 10);
   }
 
-  // --- entries section -----------------------------------------------------
-
-  function renderEntriesEmpty() {
-    setStatus(entriesStatus, "No entries match your search yet.");
-    entriesRoot.replaceChildren(
-      panel("empty", null, el("p", null, "Capture a study note through the menu-bar app or POST /api/v1/entries/ingest to see it here."))
-    );
+  function reviewCountWithin(days) {
+    const end = new Date(todayIsoDate() + "T00:00:00Z");
+    end.setUTCDate(end.getUTCDate() + days);
+    const endIso = end.toISOString().slice(0, 10);
+    return state.upcoming.reduce((total, day) => total +
+      (day.date <= endIso ? (Array.isArray(day.reviews) ? day.reviews.length : 0) : 0), 0);
   }
 
-  function renderEntries(entries) {
-    if (!Array.isArray(entries) || entries.length === 0) {
-      renderEntriesEmpty();
-      return;
-    }
-    setStatus(entriesStatus, `${entries.length} ${entries.length === 1 ? "entry" : "entries"}.`);
-    const list = panel("entries-list");
-    for (const entry of entries) {
-      list.appendChild(renderEntryCard(entry));
-    }
-    entriesRoot.replaceChildren(list);
+  function updateUpcomingStats() {
+    const days = Number((upcomingWindow && upcomingWindow.value) || 30);
+    const total = reviewCountWithin(days);
+    if (statUpcomingLabel) statUpcomingLabel.textContent = `Upcoming (next ${days} days)`;
+    statUpcomingTotal.textContent = String(total);
   }
 
-  function renderEntryCard(entry) {
-    const card = el("article", { class: "entry-card", dataset: { entryId: String(entry.id) } });
+  function renderNote(entry) {
+    const note = el("article", { class: "topic-note", dataset: { entryId: String(entry.id) } });
+    const meta = el("p", { class: "entry-meta muted" }, "Captured ");
+    meta.appendChild(el("time", { datetime: entry.created_at }, formatDateTime(entry.created_at)));
+    note.appendChild(meta);
+    if (entry.summary) note.appendChild(el("p", { class: "entry-summary" }, entry.summary));
+    const details = el("details", { class: "entry-details" });
+    details.appendChild(el("summary", null, "Show original transcript"));
+    details.appendChild(el("pre", { class: "entry-transcript" }, entry.raw_transcript || "(no transcript)"));
+    note.appendChild(details);
+    const actions = el("p", { class: "entry-actions" });
+    const result = state.generationResults.get(String(entry.id));
+    const quizSetId = result && (result.quiz_set_id || (result.quiz_set && result.quiz_set.id));
+    const interviewPlanId = result && (result.interview_plan_id || (result.interview_plan && result.interview_plan.id));
+    if (quizSetId) actions.appendChild(el("a", { class: "button", href: "/quiz?quiz_set_id=" + quizSetId }, "Quiz me"));
+    if (quizSetId && interviewPlanId) actions.appendChild(el("a", { class: "button", href: "/dashboard/interview?quiz_set_id=" + quizSetId }, "Start interview"));
+    const button = el("button", { type: "button", class: "button", dataset: { action: "regenerate" } }, "Regenerate");
+    button.addEventListener("click", () => onRegenerate(note, entry.id, button));
+    actions.appendChild(button);
+    note.appendChild(actions);
+    return note;
+  }
 
-    const header = el("header", { class: "entry-card-header" });
-    header.appendChild(el("h3", { class: "entry-topic" }, entry.topic));
-    if (entry.subtopic) {
-      header.appendChild(el("p", { class: "entry-subtopic muted" }, entry.subtopic));
-    }
+  function renderTopicCard(group) {
+    const card = el("article", {
+      class: "entry-card topic-card", dataset: { topicKey: group.key },
+      role: "button", tabindex: "0", "aria-label": `Edit ${group.topic}`,
+    });
+    const header = el("header", { class: "topic-card-header" });
+    const titleWrap = el("div");
+    titleWrap.appendChild(el("p", { class: "topic-kicker muted", dataset: { field: "note-count" } },
+      `${group.noteCount} ${group.noteCount === 1 ? "note" : "notes"}`));
+    titleWrap.appendChild(el("h3", { class: "entry-topic" }, group.topic));
+    header.appendChild(titleWrap);
+    if (group.readyNow) header.appendChild(el("span", { class: "ready-badge" }, "Ready now"));
     card.appendChild(header);
-
-    if (Array.isArray(entry.tags) && entry.tags.length > 0) {
+    card.appendChild(el("p", { class: "entry-summary" }, group.summary || "A quiet place to continue learning."));
+    if (group.tags.length) {
       const tags = el("ul", { class: "entry-tags" });
-      for (const tag of entry.tags) {
-        tags.appendChild(el("li", { class: "entry-tag" }, tag));
-      }
+      for (const tag of group.tags) tags.appendChild(el("li", { class: "entry-tag" }, tag));
       card.appendChild(tags);
     }
-
-    card.appendChild(el("p", { class: "entry-summary" }, entry.summary));
-
-    const meta = el("p", { class: "entry-meta muted" });
-    meta.appendChild(document.createTextNode("Captured "));
-    meta.appendChild(el("time", { datetime: entry.created_at }, formatDateTime(entry.created_at)));
-    card.appendChild(meta);
-
-    const details = el("details", { class: "entry-details" });
-    const summary = el("summary", null, "Show original transcript");
-    details.appendChild(summary);
-    details.appendChild(
-      el("pre", { class: "entry-transcript" }, entry.raw_transcript || "(no transcript)")
-    );
-    card.appendChild(details);
-
-    const actions = el("p", { class: "entry-actions" });
-    const regenBtn = el(
-      "button",
-      { type: "button", class: "button", dataset: { action: "regenerate" } },
-      "Regenerate"
-    );
-    regenBtn.addEventListener("click", () => onRegenerate(card, entry.id, regenBtn));
-    actions.appendChild(regenBtn);
-    card.appendChild(actions);
-
+    const dates = el("div", { class: "review-date-chips", "aria-label": "Review dates" });
+    for (const item of group.reviewDates) {
+      dates.appendChild(el("span", { class: "review-date-chip", dataset: { count: String(item.count) } },
+        `${formatDate(item.date)}${item.count > 1 ? ` · ${item.count}` : ""}`));
+    }
+    if (!group.reviewDates.length) dates.appendChild(el("span", { class: "review-date-chip is-quiet" }, "No review scheduled"));
+    card.appendChild(dates);
+    const cardActions = el("div", { class: "topic-card-actions" });
+    // Stable selector contract: data-action: "edit-topic".
+    const edit = el("button", { type: "button", class: "button", "data-action": "edit-topic" }, "Edit");
+    edit.addEventListener("click", (event) => { event.stopPropagation(); openEntryEditor(group.entries[0], card); });
+    cardActions.appendChild(edit);
+    const entryIds = new Set(group.entries.map((entry) => String(entry.id)));
+    const quizSet = state.quizSets.find((item) => item.entry && entryIds.has(String(item.entry.id)));
+    if (quizSet) {
+      const quiz = el("a", { class: "button primary", href: "/quiz?quiz_set_id=" + quizSet.id }, "Quiz me");
+      quiz.addEventListener("click", (event) => event.stopPropagation());
+      cardActions.appendChild(quiz);
+    }
+    card.appendChild(cardActions);
+    const notesId = "topic-notes-" + group.entries[0].id;
+    const open = el("button", { type: "button", class: "notes-toggle", dataset: { action: "open-notes" }, "aria-expanded": "false", "aria-controls": notesId }, `Open ${group.noteCount} ${group.noteCount === 1 ? "note" : "notes"}`);
+    const notes = el("div", { class: "topic-notes", id: notesId, hidden: true });
+    for (const entry of group.entries) notes.appendChild(renderNote(entry));
+    open.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const expanded = open.getAttribute("aria-expanded") === "true";
+      open.setAttribute("aria-expanded", String(!expanded));
+      open.textContent = expanded ? `Open ${group.noteCount} ${group.noteCount === 1 ? "note" : "notes"}` : "Close notes";
+      notes.hidden = expanded;
+    });
+    card.appendChild(open);
+    card.appendChild(notes);
+    card.addEventListener("click", (event) => {
+      if (event.target.closest("button, a, details, input, select, textarea")) return;
+      openEntryEditor(group.entries[0], card);
+    });
+    card.addEventListener("keydown", (event) => {
+      if ((event.key === "Enter" || event.key === " ") && event.target === card) {
+        event.preventDefault();
+        openEntryEditor(group.entries[0], card);
+      }
+    });
     return card;
   }
 
-  async function loadEntries(query) {
-    setStatus(entriesStatus, query ? `Searching for “${query}”…` : "Loading entries…");
-    const url = SEARCH_API + "?q=" + encodeURIComponent(query || "");
-    const res = await jsonFetch(url);
-    if (res.status === 401) {
-      window.location.href = "/signin?next=/dashboard";
-      return;
+  function updateShelfControls() {
+    const total = state.visible.length;
+    if (total === 0) state.index = 0;
+    else state.index = Math.min(state.index, total - 1);
+    if (shelfPosition) shelfPosition.textContent = total ? `${state.index + 1} of ${total}` : "0 of 0";
+    if (shelfPrev) shelfPrev.disabled = state.index <= 0;
+    if (shelfNext) shelfNext.disabled = !total || state.index >= total - 1;
+  }
+
+  function renderShelf() {
+    state.visible = model.filterAndSortTopics(state.groups, { query: state.query, filter: state.filter, sort: state.sort }, todayIsoDate());
+    state.index = 0;
+    if (!state.visible.length) {
+      entriesRoot.replaceChildren(panel("empty", null, el("p", null, "No topics match this view yet.")));
+      setStatus(entriesStatus, "No topics match this view.");
+    } else {
+      entriesRoot.replaceChildren(...state.visible.map(renderTopicCard));
+      const notes = state.visible.reduce((sum, group) => sum + group.noteCount, 0);
+      setStatus(entriesStatus, `${state.visible.length} ${state.visible.length === 1 ? "topic" : "topics"} · ${notes} ${notes === 1 ? "note" : "notes"}.`);
     }
-    if (!res.ok) {
-      setStatus(entriesStatus, describeError(res), "error");
-      return;
-    }
-    const entries = await res.json();
-    renderEntries(entries);
-    // Stats tile "Total entries" mirrors the unfiltered count, so re-query
-    // once on first load without a query to populate it accurately.
-    if (statTotalEntries.textContent === "—") {
-      const all = await jsonFetch(SEARCH_API);
-      if (all.ok) {
-        const allEntries = await all.json();
-        statTotalEntries.textContent = String(Array.isArray(allEntries) ? allEntries.length : 0);
-      } else {
-        statTotalEntries.textContent = String(Array.isArray(entries) ? entries.length : 0);
+    updateShelfControls();
+  }
+
+  function renderHorizon() {
+    const horizon = model.buildReviewHorizon(state.groups, todayIsoDate());
+    const labels = { ready: "Ready now", next7: "Next 7 days", next30: "Next 30 days", later: "Later" };
+    const descriptions = { ready: "A gentle place to begin", next7: "Coming into view", next30: "Space to prepare", later: "Resting for now" };
+    const nodes = Object.keys(labels).map((key) => {
+      const button = el("button", { type: "button", class: "horizon-card", dataset: { horizon: key } });
+      button.appendChild(el("span", { class: "horizon-count", dataset: { field: "count" } }, horizon[key].count));
+      button.appendChild(el("strong", null, labels[key]));
+      button.appendChild(el("span", { class: "muted" }, descriptions[key]));
+      button.addEventListener("click", () => setFilter(key));
+      return button;
+    });
+    upcomingRoot.replaceChildren(...nodes);
+    setStatus(upcomingStatus, "Each topic appears once, at its nearest review moment.");
+    updateUpcomingStats();
+  }
+
+  function rebuild() {
+    state.groups = model.buildTopicGroups(state.entries, state.due, state.upcoming, todayIsoDate());
+    statTotalEntries.textContent = String(state.entries.length);
+    statDueToday.textContent = String(state.due.length);
+    renderShelf();
+    renderHorizon();
+  }
+
+  function setFilter(filter) {
+    state.filter = filter;
+    document.querySelectorAll("[data-filter]").forEach((button) => {
+      const active = button.dataset.filter === filter;
+      button.classList.toggle("is-active", active);
+      button.setAttribute("aria-pressed", String(active));
+    });
+    renderShelf();
+  }
+
+  function moveShelf(delta) {
+    if (!state.visible.length) return;
+    state.index = Math.max(0, Math.min(state.visible.length - 1, state.index + delta));
+    entriesRoot.querySelectorAll(".topic-card")[state.index]?.scrollIntoView({ behavior: "smooth", inline: "start", block: "nearest" });
+    updateShelfControls();
+  }
+
+  async function loadDashboard() {
+    setStatus(entriesStatus, "Loading entries…");
+    setStatus(upcomingStatus, "Loading upcoming reviews…");
+    try {
+      const [entriesRes, dueRes, upcomingRes, quizRes] = await Promise.all([
+        jsonFetch(SEARCH_API), jsonFetch(DIGEST_API), jsonFetch(UPCOMING_API + "?days=365"),
+        jsonFetch(QUIZ_API + "/today"),
+      ]);
+      if ([entriesRes, dueRes, upcomingRes].some((res) => res.status === 401)) {
+        window.location.href = "/signin?next=/dashboard";
+        return;
       }
+      if (!entriesRes.ok || !dueRes.ok || !upcomingRes.ok) throw new Error("The dashboard could not be loaded.");
+      state.entries = await entriesRes.json();
+      state.due = await dueRes.json();
+      state.upcoming = await upcomingRes.json();
+      state.quizSets = quizRes.ok ? await quizRes.json() : [];
+      rebuild();
+    } catch (err) {
+      setStatus(entriesStatus, err && err.message ? err.message : String(err), "error");
+      setStatus(upcomingStatus, "Review timing is temporarily unavailable.", "error");
     }
   }
 
-  // --- upcoming reviews section -------------------------------------------
+  searchInput?.addEventListener("input", (event) => { state.query = event.target.value; renderShelf(); });
+  topicSort?.addEventListener("change", (event) => { state.sort = event.target.value; renderShelf(); });
+  document.querySelectorAll("[data-filter]").forEach((button) => button.addEventListener("click", () => setFilter(button.dataset.filter)));
+  shelfPrev?.addEventListener("click", () => moveShelf(-1));
+  shelfNext?.addEventListener("click", () => moveShelf(1));
+  entriesRoot.addEventListener("keydown", (event) => {
+    if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+      event.preventDefault();
+      moveShelf(event.key === "ArrowLeft" ? -1 : 1);
+    }
+  });
+  upcomingWindow?.addEventListener("change", updateUpcomingStats);
 
-  function renderUpcomingEmpty() {
-    statUpcomingTotal.textContent = "0";
-    setStatus(upcomingStatus, "No upcoming reviews in this window.");
-    upcomingRoot.replaceChildren(
-      panel("empty", null, el("p", null, "Capture a study note to schedule its 1d/3d/7d/1mo/3mo/6mo reviews."))
-    );
-  }
+  function openEntryEditor(entry, trigger) {
+    const backdrop = el("div", {
+      class: "modal-backdrop", role: "dialog", "aria-modal": "true",
+      "aria-labelledby": "edit-entry-title",
+    });
+    const modal = el("div", { class: "modal" });
+    const header = el("header", { class: "modal-header" });
+    header.appendChild(el("h2", { id: "edit-entry-title" }, "Edit note"));
+    const closeButton = el("button", { type: "button", class: "link-button", dataset: { action: "close-modal" } }, "Close");
+    header.appendChild(closeButton);
+    modal.appendChild(header);
+    const form = el("form", { class: "modal-form" });
+    const topicField = el("div", { class: "modal-field" });
+    topicField.appendChild(el("label", { for: "edit-entry-topic" }, "Topic"));
+    const topicInput = el("input", { id: "edit-entry-topic", type: "text", required: "true", maxlength: "200", value: entry.topic });
+    topicField.appendChild(topicInput);
+    form.appendChild(topicField);
+    const dateField = el("div", { class: "modal-field" });
+    dateField.appendChild(el("label", { for: "edit-entry-date" }, "Captured date and time"));
+    const dateInput = el("input", { id: "edit-entry-date", type: "datetime-local", required: "true", value: String(entry.created_at).slice(0, 16) });
+    dateField.appendChild(dateInput);
+    form.appendChild(dateField);
+    const status = el("p", { class: "modal-status", role: "status", "aria-live": "polite" });
+    form.appendChild(status);
+    const actions = el("div", { class: "modal-actions" });
+    // Stable selector contract: data-action: "delete-entry".
+    const remove = el("button", { type: "button", class: "button edit-modal-danger", dataset: { action: "delete-entry" } }, "Delete note");
+    const cancel = el("button", { type: "button", class: "button" }, "Cancel");
+    const save = el("button", { type: "submit", class: "button primary" }, "Save changes");
+    actions.appendChild(remove); actions.appendChild(cancel); actions.appendChild(save);
+    form.appendChild(actions); modal.appendChild(form); backdrop.appendChild(modal); document.body.appendChild(backdrop);
 
-  function renderUpcoming(days) {
-    if (statUpcomingLabel) statUpcomingLabel.textContent = `Upcoming (next ${days} days)`;
-    if (statUpcomingTotal.textContent !== "—") statUpcomingTotal.textContent = "—";
-    setStatus(upcomingStatus, `Loading reviews for the next ${days} days…`);
-    const res = jsonFetch(UPCOMING_API + "?days=" + encodeURIComponent(String(days)))
-      .then(async (r) => {
-        if (r.status === 401) {
-          window.location.href = "/signin?next=/dashboard";
-          return;
-        }
-        if (!r.ok) {
-          setStatus(upcomingStatus, describeError(r), "error");
-          return;
-        }
-        const grouped = await r.json();
-        if (!Array.isArray(grouped) || grouped.length === 0) {
-          renderUpcomingEmpty();
-          return;
-        }
-        const today = todayIsoDate();
-        let totalUpcoming = 0;
-        const wrap = panel("upcoming-days");
-        for (const day of grouped) {
-          totalUpcoming += Array.isArray(day.reviews) ? day.reviews.length : 0;
-          wrap.appendChild(renderUpcomingDay(day, today));
-        }
-        statUpcomingTotal.textContent = String(totalUpcoming);
-        setStatus(upcomingStatus, `${totalUpcoming} ${totalUpcoming === 1 ? "review" : "reviews"} across ${grouped.length} ${grouped.length === 1 ? "day" : "days"}.`);
-        upcomingRoot.replaceChildren(wrap);
-      })
-      .catch((err) => {
-        setStatus(upcomingStatus, "Network error: " + (err && err.message ? err.message : String(err)), "error");
+    const close = () => { document.removeEventListener("keydown", onKeydown); backdrop.remove(); trigger.focus(); };
+    const onKeydown = (event) => {
+      if (event.key === "Escape") close();
+      if (event.key !== "Tab") return;
+      const focusable = Array.from(modal.querySelectorAll("button, input"));
+      const first = focusable[0]; const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    document.addEventListener("keydown", onKeydown);
+    backdrop.addEventListener("click", (event) => { if (event.target === backdrop) close(); });
+    closeButton.addEventListener("click", close); cancel.addEventListener("click", close);
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const topic = topicInput.value.trim();
+      if (!topic) { status.textContent = "Topic is required."; return; }
+      save.disabled = true; status.textContent = "Saving…";
+      const response = await jsonFetch(`/api/v1/entries/${entry.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ topic, created_at: new Date(dateInput.value).toISOString() }),
       });
-  }
-
-  function renderUpcomingDay(day, today) {
-    const tile = el("article", { class: "upcoming-day" });
-    const head = el("header", { class: "upcoming-day-header" });
-    head.appendChild(el("span", { class: "upcoming-day-date" }, formatDate(day.date)));
-    head.appendChild(el("span", { class: "upcoming-day-relative muted" }, relativeDayLabel(day.date, today)));
-    tile.appendChild(head);
-
-    const list = el("ul", { class: "upcoming-day-list" });
-    for (const review of day.reviews || []) {
-      const li = el("li", { class: "upcoming-review" });
-      li.appendChild(el("span", { class: "upcoming-review-interval" }, review.interval_label));
-      li.appendChild(el("span", { class: "upcoming-review-topic" }, review.entry?.topic || "Untitled"));
-      if (review.entry?.subtopic) {
-        li.appendChild(el("span", { class: "upcoming-review-subtopic muted" }, "— " + review.entry.subtopic));
-      }
-      list.appendChild(li);
-    }
-    tile.appendChild(list);
-    return tile;
-  }
-
-  async function loadDueToday() {
-    const res = await jsonFetch(DIGEST_API);
-    if (!res.ok) {
-      statDueToday.textContent = "—";
-      return;
-    }
-    const items = await res.json();
-    statDueToday.textContent = String(Array.isArray(items) ? items.length : 0);
-  }
-
-  // --- wire up ------------------------------------------------------------
-
-  const debouncedSearch = debounce((value) => loadEntries(value), 200);
-  if (searchInput) {
-    searchInput.addEventListener("input", (event) => {
-      debouncedSearch(event.target.value);
+      if (!response.ok) { status.textContent = describeError(response); save.disabled = false; return; }
+      close(); await loadDashboard();
     });
-  }
-  if (upcomingWindow) {
-    upcomingWindow.addEventListener("change", (event) => {
-      const days = Number(event.target.value) || 30;
-      renderUpcoming(days);
+    remove.addEventListener("click", async () => {
+      if (!window.confirm(`Delete the note “${entry.topic}”? This cannot be undone.`)) return;
+      remove.disabled = true; status.textContent = "Deleting…";
+      const response = await jsonFetch(`/api/v1/entries/${entry.id}`, { method: "DELETE" });
+      if (!response.ok) { status.textContent = describeError(response); remove.disabled = false; return; }
+      close(); await loadDashboard();
     });
+    topicInput.focus();
   }
 
   // --- create-topic modal (SRA-902) ---------------------------------------
@@ -314,9 +402,7 @@
     initCreateTopicModal(createTopicButton);
   }
 
-  loadEntries("");
-  loadDueToday();
-  renderUpcoming(Number((upcomingWindow && upcomingWindow.value) || 30));
+  loadDashboard();
 
   function initCreateTopicModal(trigger) {
     let modal = null;
@@ -640,8 +726,7 @@
       const result = await res.json();
       close();
       prependEntryCard(result.entry, result);
-      loadDueToday();
-      renderUpcoming(Number((upcomingWindow && upcomingWindow.value) || 30));
+      await refreshReviewData();
     } catch (err) {
       setModalStatus(
         form,
@@ -679,25 +764,22 @@
   }
 
   function prependEntryCard(entry, fullResult) {
-    const root = document.getElementById("entries-root");
-    if (!root || !entry) return;
-    let list = root.querySelector(".entries-list");
-    if (!list) {
-      list = el("section", { class: "panel entries-list" });
-      root.replaceChildren(list);
-    }
-    const card = buildEntryCard(entry, fullResult);
-    list.insertBefore(card, list.firstChild);
-    const status = document.getElementById("entries-status");
-    if (status) {
-      const count = list.querySelectorAll(".entry-card").length;
-      status.textContent = count + " " + (count === 1 ? "entry" : "entries") + ".";
-    }
-    if (statTotalEntries) {
-      const previousTotal = Number(statTotalEntries.textContent);
-      statTotalEntries.textContent = String(
-        Number.isFinite(previousTotal) ? previousTotal + 1 : 1
-      );
+    if (!entry) return;
+    state.entries.unshift(entry);
+    state.generationResults.set(String(entry.id), fullResult || {});
+    rebuild();
+  }
+
+  async function refreshReviewData() {
+    try {
+      const [dueRes, upcomingRes] = await Promise.all([
+        jsonFetch(DIGEST_API), jsonFetch(UPCOMING_API + "?days=365"),
+      ]);
+      if (dueRes.ok) state.due = await dueRes.json();
+      if (upcomingRes.ok) state.upcoming = await upcomingRes.json();
+      rebuild();
+    } catch (err) {
+      setStatus(upcomingStatus, "Review timing will refresh on your next visit.", "error");
     }
   }
 
