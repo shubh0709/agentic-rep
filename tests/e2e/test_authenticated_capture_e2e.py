@@ -14,7 +14,7 @@ import httpx
 import pytest
 from sqlmodel import select
 
-from sra.agents.schemas import StudyEntryDraft, StudyEntryDrafts
+from sra.agents.schemas import StudyEntryDraft
 from sra.auth.google_oauth import issue_app_credential
 from sra.client import api_client
 from sra.client.api_client import ApiClientError, ingest_transcript
@@ -27,7 +27,7 @@ SIGNING_SECRET = "phase-three-e2e-signing-secret"
 
 
 @pytest.fixture
-def authenticated_capture(client, monkeypatch, session):
+def authenticated_capture(client, monkeypatch, override_entry_extractor, session):
     monkeypatch.setenv("AUTH_SIGNING_SECRET", SIGNING_SECRET)
     monkeypatch.setenv("API_BASE_URL", "http://phase3.test")
     get_settings.cache_clear()
@@ -45,23 +45,15 @@ def authenticated_capture(client, monkeypatch, session):
     requests = []
     clients = []
 
-    class FakeExtractionModel:
-        def with_structured_output(self, schema, **kwargs):
-            assert schema is StudyEntryDrafts
-            return self
-
-        def invoke(self, messages):
-            transcript = json.loads(requests[-1].content)["transcript"]
+    class FakeEntryExtractor:
+        def extract(self, transcript):
+            assert transcript == json.loads(requests[-1].content)["transcript"]
             marker = "Alpha" if "alpha" in transcript.lower() else "Beta"
-            return StudyEntryDrafts(
-                drafts=[
-                    StudyEntryDraft(
-                        topic=f"{marker} authenticated topic",
-                        tags=["phase3"],
-                        summary=f"Summary for {marker}",
-                    )
-                ]
-            )
+            return [StudyEntryDraft(
+                topic=f"{marker} authenticated topic",
+                tags=["phase3"],
+                summary=f"Summary for {marker}",
+            )]
 
     def send(request):
         requests.append(request)
@@ -84,7 +76,7 @@ def authenticated_capture(client, monkeypatch, session):
         return connection
 
     monkeypatch.setattr(api_client, "_create_http_client", create_http_client)
-    monkeypatch.setattr("sra.agents.ingestion_graph._get_chat_model", FakeExtractionModel)
+    override_entry_extractor(FakeEntryExtractor())
     with client:
         yield users, requests, clients
 
@@ -172,7 +164,9 @@ def test_rejected_credential_causes_no_write_and_no_automatic_retry(authenticate
 )
 def test_every_study_route_rejects_missing_credentials_before_work(
     authenticated_capture,
+    client,
     monkeypatch,
+    override_entry_extractor,
     method,
     path,
     body,
@@ -180,15 +174,12 @@ def test_every_study_route_rejects_missing_credentials_before_work(
     _, _, _ = authenticated_capture
     model_calls = []
 
-    class CountingIngestionModel:
-        def with_structured_output(self, schema, **kwargs):
-            return self
-
-        def invoke(self, messages):
+    class CountingEntryExtractor:
+        def extract(self, transcript):  # noqa: ARG002
             model_calls.append("ingestion")
-            return StudyEntryDrafts(
-                drafts=[StudyEntryDraft(topic="Should be unreachable", summary="Authentication must run first")]
-            )
+            return [StudyEntryDraft(
+                topic="Should be unreachable", summary="Authentication must run first"
+            )]
 
     class CountingQueryModel:
         def bind_tools(self, tools):
@@ -198,7 +189,7 @@ def test_every_study_route_rejects_missing_credentials_before_work(
             model_calls.append("query")
             return {"role": "ai", "tool_calls": [], "content": "Should be unreachable"}
 
-    monkeypatch.setattr("sra.agents.ingestion_graph._get_chat_model", CountingIngestionModel)
+    override_entry_extractor(CountingEntryExtractor())
     monkeypatch.setattr("sra.agents.query_graph._get_chat_model", CountingQueryModel)
 
     with api_client._create_http_client() as connection:

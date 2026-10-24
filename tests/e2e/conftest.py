@@ -12,7 +12,7 @@ import pytest
 from dateutil.relativedelta import relativedelta
 from sqlmodel import select
 
-from sra.agents.schemas import StudyEntryDraft, StudyEntryDrafts
+from sra.agents.schemas import StudyEntryDraft
 from sra.db.models import ReviewSchedule, StudyEntry, User
 
 
@@ -30,7 +30,7 @@ class InProcessCaptureAPI:
 
 
 @pytest.fixture
-def capture_api(client, monkeypatch, tmp_path):
+def capture_api(client, monkeypatch, override_entry_extractor, tmp_path):
     """Redirect HTTP to FastAPI, fake inference, and control the external clock.
 
     Neither ingest_transcript, the route, graph, repository, nor scheduler is
@@ -54,17 +54,13 @@ def capture_api(client, monkeypatch, tmp_path):
 
     monkeypatch.setattr("sra.db.models.datetime", CaptureClock)
 
-    class FakeExtractionModel:
-        def with_structured_output(self, schema, **kwargs):
-            assert schema is StudyEntryDrafts
-            return self
-
-        def invoke(self, messages):
+    class FakeEntryExtractor:
+        def extract(self, transcript):
             submitted = json.loads(harness.requests[-1].content)["transcript"]
-            assert any(submitted in str(message) for message in messages)
+            assert transcript == submitted
             if harness.model_error is not None:
                 raise harness.model_error
-            return StudyEntryDrafts(drafts=harness.drafts)
+            return harness.drafts
 
     def send(request: httpx.Request) -> httpx.Response:
         harness.requests.append(request)
@@ -82,7 +78,7 @@ def capture_api(client, monkeypatch, tmp_path):
         return connection
 
     monkeypatch.setattr(api_client, "_create_http_client", create_client)
-    monkeypatch.setattr("sra.agents.ingestion_graph._get_chat_model", FakeExtractionModel)
+    override_entry_extractor(FakeEntryExtractor())
     try:
         with client:
             yield harness

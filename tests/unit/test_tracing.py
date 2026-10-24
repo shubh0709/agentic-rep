@@ -47,7 +47,9 @@ def tracing_setup(monkeypatch):
     _get_client.cache_clear()
 
 
-def test_api_traces_include_graphs_models_and_tools(client, monkeypatch, tracing_setup):
+def test_api_traces_include_graphs_models_and_tools(
+    client, monkeypatch, override_entry_extractor, tracing_setup
+):
     settings, trace_client, client_factory = tracing_setup
     ingestion_model = FakeStudyModel(responses=[
         AIMessage(content='{"drafts": [{"topic": "Mitosis", "summary": "Cell division"}]}'),
@@ -58,7 +60,15 @@ def test_api_traces_include_graphs_models_and_tools(client, monkeypatch, tracing
         ]),
         AIMessage(content="You studied mitosis."),
     ])
-    monkeypatch.setattr("sra.agents.ingestion_graph._get_chat_model", lambda: ingestion_model)
+    class TracedEntryExtractor:
+        def extract(self, transcript):
+            result = ingestion_model.with_structured_output(StudyEntryDrafts).invoke([
+                ("system", "Extract study entries."),
+                ("human", transcript),
+            ])
+            return result.drafts
+
+    override_entry_extractor(TracedEntryExtractor())
     monkeypatch.setattr("sra.agents.query_graph._get_chat_model", lambda: query_model)
 
     assert client.post("/api/v1/entries/ingest", json={"transcript": "I studied mitosis"}).status_code == 201

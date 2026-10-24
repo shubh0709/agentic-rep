@@ -1,22 +1,35 @@
-from unittest.mock import Mock
+from dataclasses import dataclass, field
 
 import pytest
 from sqlmodel import select
 
-from sra.agents.schemas import StudyEntryDraft, StudyEntryDrafts
+from sra.agents.schemas import StudyEntryDraft
 from sra.db.models import ReviewSchedule, StudyEntry
 
 
-def test_ingest_returns_and_persists_valid_topics_with_reviews(client, monkeypatch, session, seeded_user):
+@dataclass
+class ScriptedEntryExtractor:
+    drafts: list[StudyEntryDraft] = field(default_factory=list)
+    error: Exception | None = None
+    calls: list[str] = field(default_factory=list)
+
+    def extract(self, transcript: str) -> list[StudyEntryDraft]:
+        self.calls.append(transcript)
+        if self.error is not None:
+            raise self.error
+        return self.drafts
+
+
+def test_ingest_returns_and_persists_valid_topics_with_reviews(
+    client, override_entry_extractor, session, seeded_user
+):
     drafts = [
         StudyEntryDraft(topic="Photosynthesis", subtopic="Light reactions", tags=["biology"], summary="Light reactions"),
         StudyEntryDraft(topic=" ", summary="Unusable topic"),
         StudyEntryDraft(topic="Mitosis", summary="Cell division"),
     ]
-    model = Mock()
-    model.with_structured_output.return_value = model
-    model.invoke.return_value = StudyEntryDrafts(drafts=drafts)
-    monkeypatch.setattr("sra.agents.ingestion_graph._get_chat_model", lambda: model)
+    extractor = ScriptedEntryExtractor(drafts=drafts)
+    override_entry_extractor(extractor)
     transcript = "Today I studied photosynthesis and mitosis."
 
     response = client.post("/api/v1/entries/ingest", json={"transcript": transcript})
@@ -46,6 +59,7 @@ def test_ingest_returns_and_persists_valid_topics_with_reviews(client, monkeypat
     search_response = client.get("/api/v1/search", params={"q": "mitosis"})
     assert search_response.status_code == 200
     assert [entry["id"] for entry in search_response.json()] == [body[1]["id"]]
+    assert extractor.calls == [transcript]
 
 
 @pytest.mark.parametrize(
@@ -57,11 +71,11 @@ def test_ingest_returns_and_persists_valid_topics_with_reviews(client, monkeypat
         ("Incomplete notes", [StudyEntryDraft(topic="Mitosis", summary=" ")]),
     ],
 )
-def test_ingest_rejects_unusable_transcripts_without_writing_entries(client, monkeypatch, session, transcript, drafts):
-    model = Mock()
-    model.with_structured_output.return_value = model
-    model.invoke.return_value = StudyEntryDrafts(drafts=drafts)
-    monkeypatch.setattr("sra.agents.ingestion_graph._get_chat_model", lambda: model)
+def test_ingest_rejects_unusable_transcripts_without_writing_entries(
+    client, override_entry_extractor, session, transcript, drafts
+):
+    extractor = ScriptedEntryExtractor(drafts=drafts)
+    override_entry_extractor(extractor)
 
     response = client.post("/api/v1/entries/ingest", json={"transcript": transcript})
 
@@ -71,14 +85,14 @@ def test_ingest_rejects_unusable_transcripts_without_writing_entries(client, mon
     assert session.exec(select(StudyEntry)).all() == []
     assert session.exec(select(ReviewSchedule)).all() == []
     if not transcript.strip():
-        model.invoke.assert_not_called()
+        assert extractor.calls == []
+    else:
+        assert extractor.calls == [transcript]
 
 
-def test_ingest_returns_useful_error_on_model_failure(client, monkeypatch, session):
-    model = Mock()
-    model.with_structured_output.return_value = model
-    model.invoke.side_effect = RuntimeError("private provider failure details")
-    monkeypatch.setattr("sra.agents.ingestion_graph._get_chat_model", lambda: model)
+def test_ingest_returns_useful_error_on_extractor_failure(client, override_entry_extractor, session):
+    extractor = ScriptedEntryExtractor(error=RuntimeError("private provider failure details"))
+    override_entry_extractor(extractor)
 
     response = client.post("/api/v1/entries/ingest", json={"transcript": "Today I studied mitosis"})
 
@@ -89,12 +103,12 @@ def test_ingest_returns_useful_error_on_model_failure(client, monkeypatch, sessi
 
 
 @pytest.mark.parametrize("body", [{}, {"transcript": None}])
-def test_ingest_rejects_malformed_request_body(client, monkeypatch, session, body):
-    model_factory = Mock()
-    monkeypatch.setattr("sra.agents.ingestion_graph._get_chat_model", model_factory)
+def test_ingest_rejects_malformed_request_body(client, override_entry_extractor, session, body):
+    extractor = ScriptedEntryExtractor(error=AssertionError("invalid requests must not reach inference"))
+    override_entry_extractor(extractor)
 
     response = client.post("/api/v1/entries/ingest", json=body)
 
     assert response.status_code == 422
-    model_factory.assert_not_called()
+    assert extractor.calls == []
     assert session.exec(select(StudyEntry)).all() == []

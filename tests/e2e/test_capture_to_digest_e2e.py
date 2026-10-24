@@ -8,19 +8,12 @@ ingestion agent, scheduler, and digest/chat routes compose correctly
 as one system, independent of any single unit's own mocks.
 """
 
-from sra.agents.schemas import StudyEntryDrafts
-
-
-class FakeChatModel:
+class ScriptedEntryExtractor:
     def __init__(self, drafts):
         self._drafts = drafts
 
-    def with_structured_output(self, schema, **kwargs):
-        assert schema is StudyEntryDrafts
-        return self
-
-    def invoke(self, *args, **kwargs):
-        return StudyEntryDrafts(drafts=self._drafts)
+    def extract(self, transcript):  # noqa: ARG002
+        return self._drafts
 
 
 class FakeToolCallingModel:
@@ -42,14 +35,17 @@ class FakeToolCallingModel:
         return {"role": "ai", "tool_calls": [], "content": self._answer}
 
 
-def test_ingest_then_digest_shows_the_new_entrys_first_checkpoint(client, monkeypatch):
+def test_ingest_then_digest_shows_the_new_entrys_first_checkpoint(
+    client, monkeypatch, override_entry_extractor
+):
     from datetime import date, datetime, timedelta
 
     from sra.agents.schemas import StudyEntryDraft
 
-    monkeypatch.setattr(
-        "sra.agents.ingestion_graph._get_chat_model",
-        lambda: FakeChatModel([StudyEntryDraft(topic="Photosynthesis", summary="light + dark reactions")]),
+    override_entry_extractor(
+        ScriptedEntryExtractor(
+            [StudyEntryDraft(topic="Photosynthesis", summary="light + dark reactions")]
+        )
     )
 
     ingest_response = client.post("/api/v1/entries/ingest", json={"transcript": "today I studied photosynthesis"})
@@ -77,12 +73,15 @@ def test_ingest_then_digest_shows_the_new_entrys_first_checkpoint(client, monkey
     assert any(r["entry"]["topic"] == "Photosynthesis" and r["interval_label"] == "1d" for r in due)
 
 
-def test_ingest_then_chat_can_answer_about_the_new_entry(client, monkeypatch):
+def test_ingest_then_chat_can_answer_about_the_new_entry(
+    client, monkeypatch, override_entry_extractor
+):
     from sra.agents.schemas import StudyEntryDraft
 
-    monkeypatch.setattr(
-        "sra.agents.ingestion_graph._get_chat_model",
-        lambda: FakeChatModel([StudyEntryDraft(topic="Mitosis", summary="cell division phases")]),
+    override_entry_extractor(
+        ScriptedEntryExtractor(
+            [StudyEntryDraft(topic="Mitosis", summary="cell division phases")]
+        )
     )
     client.post("/api/v1/entries/ingest", json={"transcript": "today I studied mitosis"})
 

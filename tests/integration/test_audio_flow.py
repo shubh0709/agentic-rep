@@ -24,7 +24,7 @@ from dateutil.relativedelta import relativedelta
 from langchain_core.messages import AIMessage, ToolMessage
 from sqlmodel import Session, select
 
-from sra.agents.schemas import StudyEntryDraft, StudyEntryDrafts
+from sra.agents.schemas import StudyEntryDraft
 from sra.auth.google_oauth import issue_app_credential
 from sra.capture.menubar_app import CaptureController
 from sra.capture.pipeline import process_recording
@@ -42,15 +42,11 @@ FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "study_note.wav"
 
 
 class FixtureExtraction:
-    def with_structured_output(self, schema, **kwargs):
-        assert schema is StudyEntryDrafts
-        return self
-
-    def invoke(self, messages):
-        assert "photosynthesis" in str(messages).casefold()
-        return StudyEntryDrafts(drafts=[StudyEntryDraft(
+    def extract(self, transcript):
+        assert "photosynthesis" in transcript.casefold()
+        return [StudyEntryDraft(
             topic="Photosynthesis", summary="Plants use sunlight to produce sugar and oxygen.",
-        )])
+        )]
 
 
 class FixtureQuery:
@@ -81,7 +77,6 @@ def audio_backend(monkeypatch, tmp_path, request):
         monkeypatch.setenv("OPENAI_MODEL", settings.openai_model)
     else:
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test-no-network")
-        monkeypatch.setattr("sra.agents.ingestion_graph._get_chat_model", FixtureExtraction)
         monkeypatch.setattr("sra.agents.query_graph._get_chat_model", FixtureQuery)
 
     monkeypatch.chdir(tmp_path)
@@ -97,9 +92,12 @@ def audio_backend(monkeypatch, tmp_path, request):
     @contextmanager
     def running():
         nonlocal credential
+        from sra.agents.entry_extractor import get_entry_extractor
         from sra.api.app import create_app
 
         app = create_app()
+        if not live:
+            app.dependency_overrides[get_entry_extractor] = FixtureExtraction
         if credential is None:
             with Session(get_engine()) as session:
                 user = User(email="audio@example.com", display_name="Audio fixture", google_sub="audio-fixture")

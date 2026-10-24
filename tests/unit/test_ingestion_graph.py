@@ -1,8 +1,6 @@
+from dataclasses import dataclass, field
+
 import pytest
-from langchain_core.messages import AIMessage
-from langchain_core.outputs import ChatGeneration, ChatResult
-from langchain_openai import ChatOpenAI
-from pydantic import SecretStr
 from sqlmodel import select
 
 from sra.agents.ingestion_graph import (
@@ -13,37 +11,31 @@ from sra.agents.ingestion_graph import (
     request_clarification,
     validate_entries,
 )
-from sra.agents.schemas import StudyEntryDraft, StudyEntryDrafts
-from sra.config import Settings
+from sra.agents.schemas import StudyEntryDraft
 from sra.db.models import ReviewSchedule, StudyEntry
 
 
-class FakeChatModel:
-    """A stand-in for ChatOpenAI with a scripted structured response."""
+@dataclass
+class ScriptedEntryExtractor:
+    """Application-level fake for the one external ingestion boundary."""
 
-    def __init__(self, drafts: list[StudyEntryDraft] | None = None, raise_error: bool = False):
-        self._drafts = drafts or []
-        self._raise_error = raise_error
+    drafts: list[StudyEntryDraft] = field(default_factory=list)
+    error: Exception | None = None
+    calls: list[str] = field(default_factory=list)
 
-    def with_structured_output(self, schema, **kwargs):
-        assert schema is StudyEntryDrafts
-        return self
-
-    def invoke(self, *args, **kwargs):
-        if self._raise_error:
-            raise RuntimeError("simulated LLM failure")
-        return StudyEntryDrafts(drafts=self._drafts)
+    def extract(self, transcript: str) -> list[StudyEntryDraft]:
+        self.calls.append(transcript)
+        if self.error is not None:
+            raise self.error
+        return self.drafts
 
 
-def test_extract_entries_splits_multi_topic_transcript(monkeypatch):
+def test_extract_entries_splits_multi_topic_transcript():
     drafts = [
         StudyEntryDraft(topic="Photosynthesis", summary="light + dark reactions"),
         StudyEntryDraft(topic="Mitosis", summary="cell division phases"),
     ]
-    monkeypatch.setattr(
-        "sra.agents.ingestion_graph._get_chat_model",
-        lambda: FakeChatModel(drafts=drafts),
-    )
+    extractor = ScriptedEntryExtractor(drafts=drafts)
 
     state: IngestionState = {
         "transcript": "today I covered photosynthesis and mitosis",
@@ -53,31 +45,26 @@ def test_extract_entries_splits_multi_topic_transcript(monkeypatch):
         "entries": [],
         "error": None,
     }
-    result = extract_entries(state)
+    result = extract_entries(state, extractor=extractor)
 
+    assert extractor.calls == [state["transcript"]]
     assert len(result["drafts"]) == 2
     assert {d.topic for d in result["drafts"]} == {"Photosynthesis", "Mitosis"}
     assert result["error"] is None
 
 
-def test_extract_entries_sets_error_on_llm_failure(monkeypatch):
-    monkeypatch.setattr(
-        "sra.agents.ingestion_graph._get_chat_model",
-        lambda: FakeChatModel(raise_error=True),
-    )
+def test_extract_entries_sets_error_on_extractor_failure():
+    extractor = ScriptedEntryExtractor(error=RuntimeError("simulated provider failure"))
 
     state: IngestionState = {"transcript": "...", "user_id": 1, "session": None, "drafts": [], "entries": [], "error": None}
-    result = extract_entries(state)
+    result = extract_entries(state, extractor=extractor)
 
     assert result["error"] is not None
 
 
 @pytest.mark.parametrize("transcript", ["", " \n\t"])
-def test_extract_entries_skips_model_for_blank_transcript(monkeypatch, transcript):
-    def unexpected_model():
-        pytest.fail("Blank transcripts should not construct a model")
-
-    monkeypatch.setattr("sra.agents.ingestion_graph._get_chat_model", unexpected_model)
+def test_extract_entries_skips_extractor_for_blank_transcript(transcript):
+    extractor = ScriptedEntryExtractor(error=AssertionError("Blank transcripts must not reach inference"))
     previous = StudyEntryDraft(topic="Old topic", summary="From an earlier attempt")
     state: IngestionState = {
         "transcript": transcript,
@@ -88,21 +75,16 @@ def test_extract_entries_skips_model_for_blank_transcript(monkeypatch, transcrip
         "error": None,
     }
 
-    result = extract_entries(state)
+    result = extract_entries(state, extractor=extractor)
 
+    assert extractor.calls == []
     assert result["drafts"] == []
     assert result["error"]
     assert state["drafts"] == [previous]
 
 
-@pytest.mark.parametrize("failure_stage", ["setup", "invocation"])
-def test_extract_entries_clears_stale_drafts_on_failure(monkeypatch, failure_stage):
-    def failing_model():
-        if failure_stage == "setup":
-            raise RuntimeError("private configuration details")
-        return FakeChatModel(raise_error=True)
-
-    monkeypatch.setattr("sra.agents.ingestion_graph._get_chat_model", failing_model)
+def test_extract_entries_clears_stale_drafts_on_failure():
+    extractor = ScriptedEntryExtractor(error=RuntimeError("private configuration details"))
     state: IngestionState = {
         "transcript": "I studied cell division",
         "user_id": 1,
@@ -112,66 +94,10 @@ def test_extract_entries_clears_stale_drafts_on_failure(monkeypatch, failure_sta
         "error": None,
     }
 
-    result = extract_entries(state)
+    result = extract_entries(state, extractor=extractor)
 
     assert result["drafts"] == []
     assert result["error"] == "Could not process this transcript. Please try again."
-
-
-@pytest.mark.parametrize(
-    ("raw_drafts", "expected_topics"),
-    [
-        ([], []),
-        (
-            [{"topic": "Photosynthesis", "summary": "Light reactions"},
-             {"topic": "Mitosis", "summary": "Cell division"}],
-            ["Photosynthesis", "Mitosis"],
-        ),
-        ([{"topic": "Missing summary"}], None),
-    ],
-)
-def test_extract_entries_parses_structured_model_response(monkeypatch, raw_drafts, expected_topics):
-    """Exercise the real structured-output pipeline while replacing only model generation."""
-    transcript = "Today I studied photosynthesis and mitosis."
-    settings = Settings(openai_api_key=SecretStr("sk-test"))
-    monkeypatch.setattr("sra.agents.ingestion_graph.get_settings", lambda: settings)
-    seen_messages = []
-
-    def fake_generate(self, messages, **kwargs):
-        seen_messages.extend(messages)
-        message = AIMessage(
-            content="",
-            tool_calls=[{
-                "name": StudyEntryDrafts.__name__,
-                "args": {"drafts": raw_drafts},
-                "id": "test-extraction",
-            }],
-        )
-        return ChatResult(generations=[ChatGeneration(message=message)])
-
-    monkeypatch.setattr(ChatOpenAI, "_generate", fake_generate)
-    state: IngestionState = {
-        "transcript": transcript,
-        "user_id": 1,
-        "session": None,
-        "drafts": [],
-        "entries": [],
-        "error": "Previous attempt failed",
-    }
-
-    result = extract_entries(state)
-
-    assert len(seen_messages) == 2
-    assert seen_messages[0].type == "system"
-    assert seen_messages[1].type == "human"
-    assert seen_messages[1].content == transcript
-    if expected_topics is None:
-        assert result["drafts"] == []
-        assert result["error"] == "Could not process this transcript. Please try again."
-    else:
-        assert all(isinstance(draft, StudyEntryDraft) for draft in result["drafts"])
-        assert [draft.topic for draft in result["drafts"]] == expected_topics
-        assert result["error"] is None
 
 
 @pytest.mark.parametrize(("topic", "summary"), [("", ""), (" \t", "Valid summary"), ("Valid topic", "\n ")])
@@ -312,14 +238,11 @@ def test_request_clarification_supplies_missing_message(error):
     assert result["error"] == "Please describe the topics you studied and what you learned."
 
 
-def test_build_ingestion_graph_end_to_end_persists_expected_rows(monkeypatch, session, seeded_user):
+def test_build_ingestion_graph_end_to_end_persists_expected_rows(session, seeded_user):
     drafts = [StudyEntryDraft(topic="Photosynthesis", summary="light + dark reactions")]
-    monkeypatch.setattr(
-        "sra.agents.ingestion_graph._get_chat_model",
-        lambda: FakeChatModel(drafts=drafts),
-    )
+    extractor = ScriptedEntryExtractor(drafts=drafts)
 
-    graph = build_ingestion_graph()
+    graph = build_ingestion_graph(extractor=extractor)
     result = graph.invoke(
         {
             "transcript": "today I studied photosynthesis",
@@ -335,27 +258,22 @@ def test_build_ingestion_graph_end_to_end_persists_expected_rows(monkeypatch, se
     assert result["entries"][0].topic == "Photosynthesis"
 
 
-def test_build_ingestion_graph_routes_to_clarification_on_empty_transcript(monkeypatch, session, seeded_user):
-    monkeypatch.setattr(
-        "sra.agents.ingestion_graph._get_chat_model",
-        lambda: FakeChatModel(drafts=[]),
-    )
+def test_build_ingestion_graph_routes_to_clarification_on_empty_transcript(session, seeded_user):
+    extractor = ScriptedEntryExtractor()
 
-    graph = build_ingestion_graph()
+    graph = build_ingestion_graph(extractor=extractor)
     result = graph.invoke(
         {"transcript": "", "user_id": seeded_user.id, "drafts": [], "entries": [], "error": None, "session": session}
     )
 
     assert result["entries"] == []
     assert result["error"] is not None
+    assert extractor.calls == []
 
 
-def test_build_ingestion_graph_routes_llm_failure_to_clarification(monkeypatch, session, seeded_user):
-    monkeypatch.setattr(
-        "sra.agents.ingestion_graph._get_chat_model",
-        lambda: FakeChatModel(raise_error=True),
-    )
-    graph = build_ingestion_graph()
+def test_build_ingestion_graph_routes_extractor_failure_to_clarification(session, seeded_user):
+    extractor = ScriptedEntryExtractor(error=RuntimeError("simulated provider failure"))
+    graph = build_ingestion_graph(extractor=extractor)
     updates = list(graph.stream(
         {
             "transcript": "Today I studied mitosis",
